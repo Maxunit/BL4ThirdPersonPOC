@@ -1,0 +1,741 @@
+# 0.3.9.13 – TESTVERSION HYBRID ADS MODE (09.10.2026) – AKTUELLER STAND
+Bedienungskonzept: Option "Hybrid ADS Mode" (Omni, Standard aus). ADS halten =
+Schulterzielen (Omni pausiert, Kamera +35 cm näher, Zoom-Deckel 1,35x, alle
+Waffen TPS-Route). Sprint bei gehaltenem ADS = natives Scope (FPS-Route,
+SetActorCameraMode Default 0,2 s), nochmal Sprint = zurück (route_pending
+hybrid_same_weapon, TPS-ADS nach Blend, Rearm "gleiche Waffe"). Loslassen = Omni.
+BL4 ignoriert Sprint beim Zielen -> Taste nur gelesen (omni read_combat).
+Modul hybrid_ads.py; Konsole bl4tps_omni hybrid on|off|dolly|zoom; F7-Zeile.
+Offen: Spieltest TESTPLAN_0.3.9.13 (Scope-Darstellung nach unterdrücktem
+OnZoomInChange, Feinwerte Dolly/Zoom), Hüftfeuer-Zucken separat.
+
+# 0.3.9.12 – BEAM-TIEFE, THROWABLES, SPRINT-FEUER B1/B2 (09.10.2026) 
+Basis 0.3.9.11 (Sichtung im Projekt: claude/Sichtung_0.3.9.11.md).
+0.3.9.9 Wand-Fix im Spiel bestätigt mit Rand 70 (seit 0.3.9.10 Standard).
+Beam: native_beam_origin-Stub (0xA640F0) schreibt Receiver+0x388 jetzt als
+Kamera + d*(dot(P-Kamera,d)+Rand), d aus CameraCachePrivate.POV.Rotation (Offset
+per Reflection + Live-Abgleich), Steuerblock geteilt mit dem Ziel-Trace
+(native_aim_origin.shared_control). Collision-Helfer greift nur bei Kamerastart.
+Throwables (Omni): throw_hold = Action_Gadget oder Feuer ohne Action_Zoom-Mapping,
+gehalten bis die Wurf-Montage endet (GetCurrentActiveMontage/Montage_IsPlaying).
+Sprint-Feuer: Lesefehler -> nur Brücke aus (SPRINT_FIRE_NATIVE_UNAVAILABLE);
+NO_NATIVE_REQUEST eine Abfrage nach Loslassen ohne Auftrag/Aktivität.
+Offen: Spieltest (TESTPLAN_0.3.9.12), THROW_HOLD-Montagenamen, Beam aus der Nähe
+(Sweep startet 70 cm vor Pawn-Mitte), Kamera-Spin.
+
+# 0.3.9.10/0.3.9.11 (QA): Rand 70, native Sprint-Feuer-Brücke, Throwable-Zoom-
+Fix, Omni-Status, Freifall-Drehung 540°/s, GitHub-Build.
+
+# 0.3.9.9 – ZIEL-TRACE AUF FIGURENTIEFE (09.10.2026) – IM SPIEL BESTÄTIGT (RAND 70)
+0.3.9.8 im Spiel wirkungslos: visits=applied=92, last_depth 3,2 cm bei Rand 20
+-> Schussursprung liegt in TPS schon ~17 cm vor der Figur. Native Dump
+(0xC8D630, Controller-vfunc 0x7A0): TPS -> GetPlayerViewPoint (0x718), End =
+Kamera + Dir * Reichweite, LineTraceSingleByChannel(Start = KAMERA, Kanal 4) bei
+0xC8DA19, Rotation = Ursprung -> Hit.Location (kein Treffer -> End). FPS
+(0x788) -> Blickrotation ohne Trace. Ursache Wandkante/Rücken = dieser Trace.
+Fix 0.3.9.9 (native_aim_origin.py neu ausgerichtet): Umweg bei 0xC8DA03 (lea r8/
+lea r9, 16 Bytes), Start += Dir * (dot(P-Start,Dir)+Rand), nur lokaler
+Controller (rbx), 0<Tiefe<min(1500, Trace-Länge). Rand 40 cm. Status-Zeile
+AIM_TRACE {...}. Assembler-Quelle docs/aim_trace_stub_source.py.
+Offen: Spieltest Wandkante (on/off), Rücken, Kamera-Spin; Beam an dieselbe
+Tiefenregel angleichen (eigener Origin-Stub setzt Kameraposition).
+
+# 0.3.9.8 – ZIELURSPRUNG AUF FIGURENTIEFE (09.10.2026) – WIRKUNGSLOS, ERSETZT
+Runde 3: Lieferant PC+0x448 = Kameraverwaltung. Korrektur: Interface +0x38
+liefert den SCHUSSURSPRUNG, nicht das Ziel. 0x878 = First-Person-Definition
+(TPS -> False, daher live valid=False); 0x730 (0x41E51E0) = Kamera-Cache-Position
+(+0x1910) bzw. Pawn-Sichtposition (0x718). Richtung danach über +0x48 ->
+Controller 0x7A0. In TPS startet der Schuss also an der Kamera.
+Fix 0.3.9.8 (native_aim_origin.py): Umweg bei 0x40A6ECA (24 Bytes, alle drei
+Ursprungswege), Ursprung += F * (dot(P-O,F)+Rand), Rand 40 cm, nur TPS, eigener
+Pawn (+0x3A30), 0<Tiefe<1500. Python publiziert P/F pro Frame. Konsole
+bl4tps_aim status|on|off|margin. Stub auf Linux x64 ausgeführt getestet,
+Assembler-Quelle docs/aim_origin_stub_source.py. Beam folgt (eigener Origin-Stub
+setzt noch die Kameraposition).
+
+# 0.3.9.7 – ZIELABFRAGE, MESSRUNDE 3 (09.10.2026)
+Runde 2: Halter = Pawn (Interface +0x3A30). Interface +0x38 (0x40A6D12): PC =
+Pawn+0x3C0 -> Ziel-Lieferant PC+0x448 -> vfunc 0x878 (Ziel gültig) -> vfunc 0x730
+(Zielvektor), Fallback Pawn-vfunc 0x718. Beam-Owner validierte Manager-vfunc
+0x878 = 0x4904A5C -> Lieferant vermutlich OakPlayerCameraManager. Zielpunkt aller
+Waffen = Kamera-Zielabfrage.
+0.3.9.7: Probe v3 (Lieferant, Vtable, Ernte ab 0x730/0x878/0x718) und optional
+`live`: beide Getter einmal aufrufen, Zieltiefe vs. Pawn-Tiefe (Wandkante vs.
+freie Sicht).
+Fix-Optionen danach: (1) Zielabfrage-Start auf Mündungstiefe (am Trace) oder
+(2) Getter-Nachbearbeitung: Ziel näher als Pawn-Tiefe+Rand -> Punkt fern auf
+demselben Strahl. Schwelle pro Frame aus echter Kamera/Pawn-Position (Offsets).
+
+# 0.3.9.6 – ZIELABFRAGE FÜR ALLE WAFFEN, MESSRUNDE 2 (09.10.2026)
+Runde 1 (Beam, SMG Bienen, Shotgun Minigranaten, AR Hitscan): alle Nicht-Beam-
+Waffen = WeaponBehavior_FireProjectile (0x410 = 0x43459D4). Kette: 0x410 ->
+Slot 0x2C0 Zielpunkt = Waffenhalter-Interface (OakWeapon +0xB18/+0xB20) Slot
++0x38 (Fallback Mündung 0x2C8) -> 0x3EC656E Feuerrichtung (+0x48, Fallback
+Pawn 0x720) -> Spawn 0x490. Gemeinsamer Ansatzpunkt: Interface +0x38.
+Neuer Befund: Fadenkreuz über Wandkante neben der Figur -> Projektile und Beam
+treffen die Wand. Gleicher Mechanismus wie Rear-Blocker.
+Ansatz (Z-Tiefe): Zielabfrage erst ab Mündungstiefe auf dem Kamera-
+strahl; alles davor (Rücken, Wandkante an der Kamera) ist kein Ziel; Hindernisse
+vor der Mündung bleiben echte Treffer. Beam später: eigener Origin-Stub setzt
+Kamera-Cache-Position -> ebenfalls auf Mündungstiefe verschieben.
+0.3.9.6: Probe v2 (Halter-Interface, Feuerkette in voller Länge).
+
+# 0.3.9.5 – REAR-BLOCKER FÜR ALLE WAFFEN, MESSRUNDE (09.10.2026)
+0.3.9.4 im Spiel bestätigt (leere Waffe im Sprint).
+Gemeldet: Gegner/Objekt dicht hinter der Figur (zwischen Kamera und Figur) ->
+Projektile fliegen nach hinten, Kamera-Spins (Maus und Gamepad). Beam-Fix
+(native_beam_rear_blocker/collision) sitzt in FireBeam-only Code (0xA65AF1,
+Receiver-Modus 5, Radius-20-Sweep) und kann nicht einfach erweitert werden.
+Entscheidung: Weg A (native Ziel-Korrektur wie beim Beam), kein
+Kamera-Vorrücken.
+0.3.9.5: nur lesende Befehle bl4tps_weapon_probe (Use-Modes, Behaviors,
+Override-Slots, Receiver-Slots 0x300/0x308/0x368, Code-Ernte, Kamera-Cache-
+Marken +0x1910, Aufrufe 0x38F90E) und bl4tps_native_dump (Folgerunden).
+Nächster Schritt: Proben auswerten (capstone offline), gemeinsame Zielabfrage
+der Projektil-/Hitscan-Pfade finden, Rear-Blocker-Filter analog Beam entwerfen.
+
+# 0.3.9.4 – LEERE WAFFE IM SPRINT (09.10.2026) – IM SPIEL BESTÄTIGT
+Gemeldet im Spieltest: Leere Waffe im Sprint seitlich/rückwärts abfeuern -> Omni
+setzt aus (Körper zur Kamera), bis Sprint endet oder man steht. Vorwärts ok.
+Ursache: SprintFireHandoff v2 hält Kampfausrichtung bis bIsFiring; ein
+abgelehnter Schuss liefert nie bIsFiring. Kampf pausiert Omnis Sprint-Richtungs-
+Overrides -> BL4 verbietet Seit-/Rückwärts-Sprint -> Abbruchgrund "Sprint wieder
+aktiv" tritt nie ein (Selbstblockade). Vorwärts ist Sprint nativ erlaubt.
+Umgesetzt (docs/CHANGELOG_0.3.9.4.md, Test: docs/TESTPLAN_0.3.9.4.md):
+- Freigabe NATIVE_FIRE_NOT_ADMITTED: Taste los, kein Schuss, kein Sprint und
+  Sprint-Ende länger her als OakWeapon.PostSprintUseDelay (gelesen, sonst 0,2 s)
+  + 0,25 s. Gültige verzögerte Schüsse unverändert überbrückt.
+- Report: sprint_fire_episodes (32), sprint_fire_not_admitted; Meldung
+  SPRINT_FIRE_NOT_ADMITTED (sichtbar mit diag on).
+Offen: ob BL4 danach selbst weitersprintet (Testplan 1.4); Munitionsfeld zur
+direkten Erkennung "Waffe leer" weiterhin unbestätigt (nur VisibleAmmoState als
+Kandidat).
+
+# 0.3.9.3 – SHOP/INTERAKTION (09.10.2026) – IM SPIEL BESTÄTIGT
+Spieltest 0.3.9.2 (QA): Respawn-Kamerafahrt, Save/Load, Slides in alle
+Richtungen, Sniper-ADS, Leiter, Greifhaken, Fahrzeug, Vaulting, FFYL mit Second
+Wind sauber. Gemeldet: Shop "löst TPSRecovery aus".
+Befund: Das war nicht tps_recovery, sondern der vorhandene Recoil-Sicherheits-
+pfad (NATIVE_RESTORE_FAILED camera_pop:requested -> NATIVE_FAULT_RECOVERED
+settled_tps_recovery). Ursache: Restore erst im POST von ClientSetCurrentInter-
+actable, wenn StructuredInteraction schon auf dem Stack liegt.
+Umgesetzt (docs/CHANGELOG_0.3.9.3.md, Test: docs/TESTPLAN_0.3.9.3.md):
+- Restore vor ServerUseObject auch für OakVendingMachine (shop_server_use_pre),
+  Rearm-Halt über npc_native_resume wie bei Quest-NPCs.
+- Interaktions-Keybinds folgen Action_Use (E / Gamepad_FaceButton_Left).
+- bl4tps_actions gleicht sofort ab; Bericht mit frames/skips/route_registered
+  (Log 0.3.9.2 zeigte syncs=0 ohne Fehler, Ursache offen).
+Slide-Report: slide_exit_cycles 9x, native Drift bis 165° gehalten -> Fix wirkt.
+Spieltest 0.3.9.3 (09.10.2026): bestätigt. Shop: NATIVE_STOP
+reason=shop_server_use_pre, Restore-Gate mit nur dem TPS-Eintrag (count=1), kein
+NATIVE_RESTORE_FAILED/settled_tps_recovery mehr. Action-Key-Sync: syncs 68 ->
+122 -> 159, frames ~22k, skips nur cursor_shown, Route stabil (restores=0).
+Use auf C umgelegt -> Interaktion folgt (FOLLOWING), abseits von Zielen
+KEPT_NO_CONFIGURED_KEY wie vorgesehen. syncs=0 aus 0.3.9.2 nicht reproduziert;
+Ursache unbekannt, Diagnose bleibt drin.
+Weiter offen: Schritt 6 Pipeline-Refactor; Auto-Re-Arm von Omni nach Fehler-
+stopp; Kamera-only-Fallback auf unbekannten Builds; Fire-Zucken, leeres Magazin (0.3.9.4),
+Luft-Rotation, Oberkörper-Blick, Loot-Toleranz, Ability/Granate-Ausrichtung,
+EGS-Tabellen, Fahrzeug-WASD.
+
+# 0.3.9.2 – RESPAWN-KAMERAFAHRT (09.10.2026)
+Richtigstellung: Respawn soll die Respawn-Kamerafahrt per modifiziertem Blend-In
+an der aktiven TPS-Kameraposition enden lassen (vorhandener respawn_camera.py-
+Pfad, Push mit Rest-Blenddauer). 0.3.9.2 startet diesen Pfad bei sichtbarer
+RespawnCamera, falls ClientRestart keinen Lifecycle gestartet hat. 0.3.9.1 nicht
+separat testen; Testplan: docs/TESTPLAN_0.3.9.2.md.
+
+# 0.3.9.1 – KORREKTUREN NACH SPIELTEST 0.3.9.0 (09.10.2026)
+Spieltest 0.3.9.0 (QA): Installation, Build-Gate (steam-2026-09-14), Regression
+ohne Omni, ADS-Remap, Omni an/aus, Diagnose/Report, Autostart/Kaltstart und
+Mod aus/an ohne Befund. Offen geblieben:
+a) Tod/Respawn -> nach Respawn-Kamera FPS; F5 musste mehrfach.
+b) Save -> Hauptmenü -> Laden -> FPS, F5 zweimal nötig.
+   Beide Logs ohne CAMERA_LIFECYCLE_ARMED: ClientRestart-Reparatur nie gestartet.
+c) Slides links/rechts/hinten (nur mit Omni möglich) enden zur Kamera gedreht.
+d) bl4tps_actions: keine Use/Interact-Aktion unter /Game/GameData/Input/
+   EnhancedInput/, E fehlt komplett.
+
+Umgesetzt in 0.3.9.1 (docs/CHANGELOG_0.3.9.1.md, Test: docs/TESTPLAN_0.3.9.1.md):
+- tps_recovery: settled Default bei gewünschtem TPS ohne Sonderroute -> vorhandene
+  Lifecycle-Reparatur (Grund tps_desync), max. 3 Versuche/Episode, 3 s Abstand.
+  Nur Notlösung (Save/Load u. a.); für Respawn gilt der Kamerapfad aus 0.3.9.2.
+- F5 bei sichtbarer FPS-Kamera und gewünschtem TPS repariert statt auszuschalten.
+- CLIENT_RESTART_SEEN-Diagnose für die eigentliche Ursache von a/b.
+- Omni SLIDE_EXIT: Slide-Körperführung bis die Hauptmod die TPS-Kamera nach dem
+  Slide bestätigt; TurnState bleibt neutralisiert, Richtung wird gehalten.
+- bl4tps_actions all: alle Mapping-Zeilen mit Pfad (Interaktion vor einer
+  Kiste ausführen).
+Native Templates/RVAs unverändert. 96 lokale Tests grün. Spieltest offen.
+
+
+# INTEGRATION IN DIE HAUPTMOD – 0.3.9.0 (08.10.2026) – AKTUELLER STAND
+Dieser Abschnitt hat für Prioritäten Vorrang. Die älteren Abschnitte darunter
+dokumentieren den Laborverlauf (Basis: Weapon Fire State Diagnostic).
+
+Umgesetzt (Details: docs/CHANGELOG_0.3.9.0.md, Spieltest: docs/TESTPLAN_0.3.9.0.md):
+- Omni als Subpaket BL4ThirdPersonPOC/omni, Owner explizit injiziert, kein
+  _on_disable_impl-Monkeypatch; eigene erste Stufe in mod_shutdown.
+- Feature-Toggle (Standard AUS) im F7-Menü unter CAMERA MODES, Konsole
+  bl4tps_omni on|off|status|report|diag on|off, Autostart bei gesetzter Option.
+- Produktionsmodus: Statusmeldungen nur dev_warning, Pose-/Waffen-Diagnose und
+  JSON nur bei diag on oder Fehlern; Reports unter
+  sdk_mods/settings/BL4ThirdPersonPOC_reports (max. 40).
+- Input: ein Key-State-Durchlauf pro Callback; Mapping-Scan nur bei Anzahl-
+  änderung, Menü-Ende oder alle 30 Updates. Fail-closed-Regeln unverändert.
+- Kein Rotations-Snapback beim Stopp (native Rotation übernimmt).
+- Pinning: NativeTrace slide_control/slide_buffer jetzt am gepinnten control.
+- Kaltstart: ClientRestart vor Game-Thread-Bindung ohne Session ist kein Fehler.
+- Hauptmod: ADS-Keybinds folgen Action_Zoom (Maus/Tastatur und Gamepad
+  getrennt); Interaktion bleibt E/Viereck bis Action-Name bestätigt
+  (bl4tps_actions). Zentrales Build-Gate mit Steam/EGS-Hinweis; unbekannter
+  Build = Mod komplett inaktiv, nur bl4tps_build.
+Native Templates, RVAs und Gameplay-Logik unverändert (V3-Audit-Hash grün).
+NOCH KEIN SPIELTEST dieser Integration.
+
+Nächste Schritte:
+1. Spieltest nach TESTPLAN_0.3.9.0 (Kaltstart/Autostart und ADS-Remap zuerst).
+2. bl4tps_actions-Ausgabe auswerten -> Use/Interact-Aktion eintragen.
+3. Danach: Frame-Pipeline (24-stufige Kette) in flache Zustandslogik
+   überführen, abgesichert durch Replay-Tests; erst nach bestätigtem Spieltest.
+4. Offen wie bisher: Feuer-Zucken (SprintFire v2 visuell), Leeres-Magazin-
+   Hänger (WeaponFire-Diagnose, jetzt nur mit diag on), optische Luftdreh-
+   Glättung, native Oberkörper-Blickdrehung, Loot-Toleranz am Crosshair,
+   Special Ability/Granate zur Kamerarichtung, Lebenszyklus-Regression
+   (FFYL, Respawn, Travel, Save/Load), EGS-Build-Tabellen.
+5. Entscheidung offen: automatisches Re-Arm nach Fehlerstopp (derzeit fail
+   closed bis manuell wieder eingeschaltet).
+
+
+# BL4 Omnidirectional – Crouch Idle Scope Validation
+
+Gezielte Testkorrektur auf Basis der Crouch/Perspective- und AirInput-Build.
+Diagnose174308: Actor/Mesh halten ihre Richtung, während Root-Pose im Crouch-Stand bei Kameradrehungen weiterdreht. Fünf lokale GbxAnimNode_IdleTurns-Empfänger wurden reflektiert und besitzen dieselbe geprüfte Vtable; bisher korrigierte Root-/IdleUpdate-Worker filtern nur IdleTurns_2. Die verfügbaren skalaren Node-Felder sind leer: es wird deshalb kein einzeln identifizierter Crouch-Knoten behauptet.
+
+Neue native_idle_scope.py erweitert ausschließlich die Receiver-Filter der vorhandenen IdleRoot-/IdleUpdate-Worker auf diese fünf exakten lokalen Animationsknoten. Root-Zusatzdrehung überspringen und nativen Idle-Fallback wählen, solange die bisherigen freien Omni-Gates aktiv sind. Combat und Sonderzustände geben weiterhin native Steuerung frei. Das soll kamerabezogenes Zurückdrehen der Crouch-Pose und verbleibende Root-Pose beim Aufstehen verhindern; Runtime-/visuelle Bestätigung steht aus.
+
+Keine Actor-Gegendrehung, keine Bone-/Node-Zustandswrites aus Python. Node-Adressen aus aktuellem SDK-Schema und Weak-Owner, nicht aus übernommenen absoluten Adressen. Exakter Node-Satz und geprüfte Vtable erforderlich; jede Ownership-Abweichung stoppt. Vorhandene Build-/Prologue-/Page-/Readback-/Cleanup-Gates übernommen. Originale native_rotation.py bleibt unverändert; zwei neue118-Byte-Templates separat mit Hash abgesichert, gleiche Hook-Ziele und Hook-Anzahl. Luftdash-Code bleibt unverändert.
+
+## Installation / Test
+
+BL4 beenden, bisherige Dateien inklusive __pycache__ ersetzen; sdk_mods komplett installieren, neu starten, TPS einschalten.
+Start/Stop: `pyexec player_omnidirectional_gameplay.py`.
+
+1. Kurz normal bewegen; ducken, seitwärts/rückwärts/diagonal bewegen, loslassen. Im geduckten Stand Kamera drehen. Keine selbstständige Root-/Ganzkörperausrichtung zur Kamera erwartet.
+2. Aufstehen und stehenbleiben: sichtbare Pose soll zur gehaltenen Körperrichtung passen. Wieder bewegen/ducken und vergleichen.
+3. Kurz Fire/ADS im Crouch, danach frei bewegen; native Kampfausrichtung und Rückkehr prüfen. Bekanntes Feuer-Zucken bleibt offen.
+4. Normaler Stand mit Kameradrehung, Boden-/Luftdashes (besonders Tastaturdiagonalen), TPS/FPS-Rückkehr vergleichen. Dann stoppen und JSON senden.
+
+Pose-Diagnose bleibt für diese Validierung aktiv. Neue idle_scope_bindings, Root-/Update-Counter und begrenzte Crouch-/Head-Pose-Daten im Bericht. Perspektivwechsel behalten Diagnosezusammenfassungen. Stop erwartet vollständiges Cleanup,0 Hooks/Patches.
+
+39 lokale Python-/SDK-Stub-Tests bestanden. Neue Templates im isolierten Linux-x64-Prozess ausgeführt:96 Fälle (Root/Update, fünf gültige Receiver und fremder Receiver, enabled/disabled, alle Original-Branch-Flags) bestanden. Reproduktion: `python docs/run_idle_scope_validation.py` unter Linux x64. Assemblersourcen und Binärtemplates enthalten. Kein Ersatz für den BL4-Spieltest.
+
+
+# BL4 Omnidirectional – Crouch Idle Diagnostic v2
+
+Korrektur der Bericht-Aufbewahrung, keine weitere Gameplay-Korrektur.
+174043 enthält zwei Sitzungen: die erste mit 469 Samples endet bei PERSPECTIVE_NATIVE_HANDOFF; nur Cleanup-Zusammenfassung bleibt. Die vollständige zweite Sitzung enthält 129 Samples und keinen Crouch-Ablauf. Deshalb fehlen die entscheidenden Idle-/Pose-Daten in dieser JSON. QA meldet erhaltene falsche Pose beim Aufstehen; Ursache bleibt offen.
+
+Diese Version bewahrt pro diagnostischer Sitzung bis zu128 Crouch-Pose-Paare,128 Head-Pose-Samples,256 kompakte Übergangssamples und die tatsächlichen IdleTurns-Layouts im retired_sessions-Bericht. Der Crouch-Zustand wird auch in normalen Head-Pose-Samples gespeichert. Damit bleibt die Untersuchung beim TPS/FPS-Wechsel nachvollziehbar. Maximal16 Sitzungszusammenfassungen. Keine neuen nativen Patches, keine Änderungen an Bewegung/Rotation oder Dash-Korrektur.
+
+## Kurzer Test
+
+BL4 vollständig beenden, Ordner und __pycache__ ersetzen; neu starten, TPS einschalten.
+Start/Stop: `pyexec player_omnidirectional_gameplay.py`.
+
+Kurz normal laufen, ducken und seitwärts bewegen; dann loslassen. Kamera ruhig halten und sichtbare Rückdrehung abwarten. Aufstehen und zwei bis drei Sekunden stehenbleiben. Probe danach stoppen und JSON senden. Ein Perspektivwechsel ist nicht nötig, verliert jetzt aber auch nicht mehr die vorherige Crouch-Diagnose.
+
+36 lokale Tests bestanden, einschließlich begrenzter Aufbewahrung der Crouch-/Stand-Daten. Neue Bericht-Aufbewahrung noch im Spiel zu bestätigen. Crouch-Fix weiterhin offen.
+
+
+# BL4 Omnidirectional – Crouch Idle Binding Diagnostic
+
+Befund aus 164100: Actor und Mesh halten die Bewegungsrichtung, im Crouch-Stand dreht der Root-Knochen jedoch relativ zum Mesh (z.B. Actor98.96 / Kamera8.96 / Root-Mesh-90 Grad). Keine zusätzliche Actor-Drift, vollständiger fehlerfreier Cleanup. Die sichtbare Rotation ist somit in der Root-Pose belegt. Welcher Crouch-IdleTurns-Knoten sie verursacht, ist noch nicht sicher belegt; der vorhandene Worker bindet exakt IdleTurns_2.
+
+Diese reine Diagnose erweitert die Pose-Aufnahme um alle runtime-reflektierten GbxAnimNode_IdleTurns-Empfänger, Layouts, Vtable-Vergleich mit dem bereits geprüften Idle-Worker und aktuelle skalare Zustände/BlendWeights. Keine neue Rotation, kein neuer nativer Patch, keine geratenen Knoten/Offsets. Nicht als Fix behauptet. Begrenzte Aufnahme und vorhandene Cleanup-/Owner-Gates bleiben.
+
+## Test
+
+BL4 beenden, Dateien inklusive __pycache__ ersetzen, neu starten. TPS einschalten. Start/Stop: `pyexec player_omnidirectional_gameplay.py`.
+
+Kurz normal laufen; dann ducken, seitwärts bewegen und loslassen. Die Kamera ruhig halten, bis die sichtbare Drehung zurück zur Kamera passiert. Anschließend zeitnah stoppen und JSON senden. Ein solcher Ablauf reicht zunächst; keine weitere komplette Richtungsrunde nötig.
+
+35 lokale Tests bestanden. Runtime-Schema-Anbindung der zusätzlichen Diagnose muss im Spiel bestätigt werden. Die bisherige Crouch-Korrektur ist weiterhin unvollständig; TPS/FPS und Luftdash-Verhalten bleiben unverändert.
+
+
+CROUCH-REGRESSION 163419 – KEINE VOLLSTÄNDIGE FREIGABE
+QA meldet sichtbares selbstständiges Drehen. Fehlerfreier Cleanup beweist keine korrekte Pose. Actor folgt im erhaltenen Ausschnitt dem Input; Bone-/Mesh-Pose fehlt. Neue CrouchPose-Diagnose sammelt begrenzte Pose-Paare; Ursache und Fix offen. Perspektivwechsel aus 163107 separat bestätigt.
+
+AKTUELLER ARBEITSSTAND – 08.10.2026, CROUCH / PERSPEKTIVWECHSEL
+Aktuelle Testbuild: BL4_Omnidirectional_Crouch_Perspective_Validation.zip.
+Die folgenden älteren Abschnitte dokumentieren den Verlauf. Dieser aktuelle
+Abschnitt hat für Prioritäten und Freigabestatus Vorrang.
+
+Bestätigt: QA meldet Luftdash-Richtungen und freie Luftausrichtung im
+AirInput-Paket korrekt, ohne frühere Trägheit und ohne sichtbare Beinprobleme.
+Berichte 070007/070754: fehlerfrei, vollständiges Cleanup, 0 Hooks/Patches.
+Letzter Lauf: 22 korrigierte Luftdashes (20 native Enden, 2 Luftzustands-
+Übergaben), 4 Boden-Dashes, 52/52 Luft- und 33/33 Boden-Clip-Wiederherstellungen.
+Umgelegte Sprint-/Sprung-Aktionen sowie Fahrzeug-Rebind bereits kurz geprüft;
+Remapping innerhalb derselben Aufnahme und vollständige Regression offen.
+
+Aktuell in Arbeit / noch im Spiel zu prüfen:
+1. Crouch: bisher expliziter nativer Handoff ohne Körperfolge. Neuer eigener
+   Crouch-Pfad folgt Bewegungseingabe, auch bei langsamer Analogbewegung und
+   gehaltener Crouch-Aktion. Ohne Eingabe Ausrichtung halten. Combat folgt
+   Control-Yaw und gibt native Aim-Pose frei. Vorhandene Root-/Idle-/Crouch-
+   Aim-Korrektur wird nur bei freiem Crouch aktiviert; keine Dash-/Sprint-
+   Publisher. Setter-/Readback-Prüfung bleibt. Keine neuen nativen Templates.
+2. TPS -> FPS: bisher Child-Stop bzw. Supervisor-Stop. Jetzt vollständige
+   Gameplay-Retirement mit Wiederherstellung, nur Lifecycle-Beobachter bleiben
+   bis TPS zurückkommt. Neu binden erst nach den bisherigen stabilen On-Foot-
+   Gates; noch keine Zusage für sofortiges Rebind während Luft/Sprint/ADS.
+   PRE und POST prüfen den Perspektivwechsel vor Gameplay-Bound-Sampling.
+   Mod deaktivieren und manueller Stop beenden weiterhin alles. Unbekannte
+   Owner-Wechsel und Cleanup-Konflikte bleiben Fehler mit Fail-Closed.
+
+Danach offen, noch nicht umgesetzt:
+3. Leichtes Zucken bei Feuerübergang Bewegung -> Kampfausrichtung.
+4. Dezente optische Glättung von WASD-/Stick-Drehungen; Dash-Richtung weiter
+   sofort unabhängig von Körperrotation erfassen. Freie Luftausrichtung ist
+   derzeit bewusst unmittelbar; langsame Schwungausrichtung nicht zurückholen.
+5. Native begrenzte Oberkörper-Blickdrehung wieder mit Omni erhalten. Die QA hat
+   die Aufnahme ausdrücklich bestätigt. Ursache/Anim-Pfad noch analysieren;
+   Zusammenspiel mit Feuer/ADS und funktionsfähiger Dash-Pose beachten.
+6. Neueste Build: Mantle/Greifhaken/Leiter/Ground Slam, FFYL/Second Wind,
+   Tod/Respawn, Travel/Save Load, Kampf-/Waffen-/Reload-Übergänge und längere
+   Sessions testen. Integration in Hauptmod mit eigenem Feature-Toggle,
+   Performance/Diagnose-Aufräumen und Kamera-/Waffen-Regression folgen.
+   Hauptmod-ADS-Remapping und Steam/EGS-Buildschutz bleiben separate QA-Gates.
+7. Größere Loot-Erfassung ums Crosshair: separate Feature-Anfrage, offen.
+
+34 lokale SDK-Stub-/Python-Tests bestanden, einschließlich Crouch-Ausrichtung,
+Combat/Idle, Readback-Konflikt, Perspektivübergabe aus PRE/POST, stabiler TPS-
+Neubindung und Cleanup-Fehlerweitergabe. Native Implementierungen und der
+AirInput-Code sind gegenüber der zuletzt getesteten Build unverändert.
+Neue Crouch-/Perspektivkorrektur noch NICHT im BL4-Prozess bestätigt.
+
+HISTORISCHER VERLAUF
+===================
+
+BL4ThirdPersonPOC – Omnidirectional Movement
+Offene Arbeiten und bestätigter Stand
+Stand: 08.10.2026, nach modularem Cleanup auf Basis V3
+
+ZIEL
+Kamerabezogene Bewegung mit Körperausrichtung entlang der Bewegung, manuellem
+Sprint, passenden Boden-/Luft-Dashes und Slides. Maus/Tastatur und Controller
+müssen unterstützt werden. Native Boost-Charges, Cooldowns und sonstige
+Spielbedingungen bleiben erhalten. Keine hartcodierten Gameplay-Keybinds in
+der späteren Umsetzung. Integration als optionales Feature mit eigenem Toggle
+im Mod Menu; noch keine QA-Freigabe.
+
+HISTORISCHER V2-TESTSTAND
+Damals getestete Probe: player_camera_relative_combined_ground_live_v2.py
+Bericht: player_camera_relative_combined_ground_live_v2_20261008_041635_902680.json
+
+Dieser Lauf endete mit USER_STOP nach etwa 30,54 Sekunden / 1829 Gameplay-
+Updates. Keine Fehler im Supervisor, Gameplay oder Eingabe-/Pose-Diagnose.
+cleanup_complete=true, SDK-Hooks und native Patches nach Stop jeweils 0.
+Alle vorhandenen Wiederherstellungs-Prüfungen waren erfolgreich.
+Neun Boden-Clip-Belegungen und neun Wiederherstellungen; sechs beobachtete
+native Circle-Boden-Dashes jeweils mit Start und Ende. Ein zusätzlicher
+Sprint-/Dash-Zyklus endete nativ. Keine automatischen Sprint-Anforderungen.
+Ein Luftdash nach dem Waffenwechsel endete nativ, erhielt genau eine
+Vektorkorrektur; Luft-Clips einmal gesetzt und einmal wiederhergestellt.
+Die Getter-Ergebnisse enthalten zwei verschiedene Waffenobjekte.
+
+Wichtige Grenze: ground_clip_native_replacements ist in diesem Lauf leer.
+Der neue Erhalt bereits nativ ersetzter Boden-Clips und der Fehlerbericht bei
+fehlgeschlagenem Cleanup sind lokal geprüft, aber hier nicht im Spiel
+aktiviert worden. Der Lauf bestätigt keine vollständige Gameplay-Freigabe
+und allein auch keine visuelle Korrektheit sämtlicher Bewegungen.
+
+BISHER BESTÄTIGTE EINZELERGEBNISSE
+- Freies Gehen: Körper folgt Bewegung; im Stand letzte Richtung halten.
+- Lean-Korrektur beseitigte verdrehte Laufhaltung/Beine in gezielten Tests.
+- Sprint in alle Richtungen mit Forward-Sprint-Animationsauswahl.
+- Native Tastatur: Shift startet vorwärts Sprint; andere native Richtungen
+  können direkt Dash auslösen. Tastatur-Slide liegt auf der Crouch-Aktion
+  (Standard STRG), nicht auf Shift. Native Klassifizierung beibehalten.
+- Controller: Sprint-Aktion (Standard L3) startet Sprint; erneute Aktion im
+  Sprint ermöglicht unseren Dash. Circle bleibt kontextsensitiv für native
+  Crouch-/Slide-/Dash-Abläufe. Im Luftdash Körperblickrichtung beim Druck
+  erfassen, nicht die schneller wechselnde Stick-Zielrichtung.
+- Boden-Forward-Clips: gezielte A/B-Tests links, rechts und hinten sowie
+  wiederholte B-Dashes mit Richtungswechseln visuell und per Bericht bestätigt.
+- Diagonale native Shift-Dashes S+A und S+D: A jeweils etwa 45 Grad falsch,
+  B praktisch exakt in erfasster Bewegungsrichtung. W+A/W+D laufen im Spieltest
+  über den funktionierenden Sprint-Pfad; separate Shift-A/B-Aufnahme unnötig.
+- Sprung-/GroundSlamExit-Korrekturen in gezielten A/B-Tests visuell bestätigt.
+- Slide-Körper und Kopf in gezielten Tests korrekt ausgerichtet.
+- Frühere Proben: Mantle, Greifhaken, Leiter/Kletterwand, ESC und Fahrzeug-
+  Übergänge pausierten/resumierten korrekt. In der neuesten Kombination
+  erneut prüfen; frühere Erfolge sind keine vollständige Regression.
+
+OFFENE ARBEITEN – REIHENFOLGE
+
+1. Kombinierte Gameplay-Stabilität bestätigen
+   - V2 mit Boden-Dashes in allen Achsen und Diagonalen testen, insbesondere
+     native Shift-Dashes S+A/S+D sowie Circle links/rechts/hinten.
+   - Visuell Körper, Beine/Füße und tatsächliche Dash-Richtung vergleichen.
+   - Sprung -> Luftdash -> Landung -> erneuter Boden-Dash mehrfach wiederholen.
+   - Waffenwechsel vor/nach Dash, Nachladen und unterschiedliche Waffentypen.
+     Erst ausgerüstete Waffen testen, danach schnelle Übergänge gezielt.
+   - ADS und normales Feuern während Bewegung prüfen: erster Schuss korrekt,
+     native Kampfausrichtung und fließende Rückkehr zur freien Bewegung.
+   - Leeres/halbvolles/volles Boost-Meter vergleichen. Native Slide-Fallbacks
+     bei fehlenden Charges müssen Bewegungsrichtung samt Körper/Kopf halten.
+   - Kurze Prüfungen zuerst; längerer Kampf-/Gameplay-Lauf nach erfolgreicher
+     Übergangsprüfung. Fehler anhand Bericht und sichtbarem Verhalten bewerten.
+
+2. Clip-Ownership und Abbruchpfad weiter absichern
+   - Nativ veränderte Clips unverändert lassen; nur noch eigene Ersetzungen
+     zurücksetzen. Alte Waffen-Clips niemals auf neue native Belegung zwingen.
+   - Auf geänderte AnimInstance, Tags, abgelaufene Originalreferenzen und
+     Setzen/Wiederherstellen mit fehlerhaftem Readback gezielt prüfen.
+   - Wiederherstellung vor Boden/Luft-Übergabe und Lebenszyklus-Pause prüfen.
+   - Gameplay-Verarbeitung bei Fehler zuerst deaktivieren; native Cleanup-
+     Versuche fortsetzen; Bericht trotz unvollständigem Cleanup speichern.
+   - Retained Cleanup-State für manuellen Retry erhalten, keine Frame-Schleife
+     und kein falsches Erfolgs-/Null-Patches-Reporting bei verbleibenden Hooks.
+   - Runtime-Nachweis der neuen Fehlerpfade fehlt; keine absichtlichen riskanten
+     Speicherfehler im Spiel erzeugen. Lokale Fehler-Injektion bevorzugen.
+
+3. Eingaben vollständig auf Spielaktionen umstellen – Pflicht vor QA
+   - Standardtasten-/Button-Abfragen sind in der Probe noch technische Schulden.
+   - Bewegungs-, Sprint-, Dash/Crouch-, Sprung-, ADS- und Feuer-Eingaben aus
+     nativen Spielaktionen/bestehenden Bindings beziehen; Benutzer-Keybinds
+     dürfen nicht durch feste WASD/Shift/Space/STRG/Maus/Gamepad-Keys ersetzt werden.
+   - Native Sprint-Callback-Erkennung bereits vorhanden; restliche Pfade prüfen.
+   - Bekannter Produktionsfehler: versteckte ADS-Bindings auf RightMouseButton
+     und Gamepad_LeftTrigger reagieren nicht automatisch auf Spiel-Remapping.
+     TPS-ADS ebenfalls auf native Aktionen umstellen.
+   - Maus/Tastatur und DualSense, Analogstärke/Deadzone, schnelle Gerätewechsel
+     und umgebundene Tasten testen. Halten/Loslassen/erneutes Drücken beachten.
+   - Controller-Kontext erhalten: Crouch im Stand, Slide beim Sprint,
+     Luftdash und Ground Slam im passenden Zustand. Native ADS erlaubt laut
+     QA keinen Dash; vorhandene Beschränkung respektieren.
+
+4. Lebenszyklus und Sonderzustände komplett testen
+   - Sprung/Landung, Mantle, Greifhaken, Leiter/Kletterwand und Ground Slam.
+   - FFYL -> Second Wind; Tod -> Respawn.
+   - Fast Travel/Kartenwechsel; Hauptmenü -> Save Load/ClientRestart.
+   - ESC/andere Menüs; Fahrzeug rufen, einsteigen, aussteigen.
+   - Mod aus/an, FPS/TPS-Wechsel und Feature-Toggle in erlaubten Zuständen.
+   - Bei normalen Sonderzuständen sicher pausieren/resumieren; bei neuem Pawn
+     kontrolliert neu binden. Keine alten Pointer/Clips auf neue Owner übertragen.
+   - Unbekannte Build-/Owner-/Cleanup-Konflikte weiterhin fail closed.
+
+5. Performance, Diagnose und Produktionsintegration
+   - Getter-/Schema-Kosten, Native-Records und Speicherbedarf bei langer Session
+     messen; keine unnötigen Getter pro Frame oder unbegrenzten Listen/Logs.
+   - Diagnosen begrenzen; normale Zustandsmeldungen sparsam, Fehler einmal
+     samt Bericht statt konstantem Spam. Produktionscode von Probe-Diagnose trennen.
+   - Event-/State-basierte Umsetzung beibehalten, keine Timer-/Polling-Threads.
+   - Bestätigte Regeln in Produktionsmodule überführen; lokale Tests für
+     Ownership, Cleanup, Zustandswechsel und Eingabe-Routing übernehmen.
+   - Eigenen Mod-Menu-Toggle analog zum Fahrzeugfeature samt klarer Beschreibung
+     der abweichenden Sprint-/Dash-Bedienung anbieten. Default noch festlegen;
+     für erste QA ist standardmäßig deaktiviert eine sinnvolle Option.
+   - Integration mit bestehenden Kamera-/ADS-/Beam-/Recoil-/Slide-Features testen.
+
+SEPARATER, VOR QA ZU ERLEDIGENDER BUILD-SCHUTZ
+Die aktuelle Mod ist nach den bisherigen Berichten nicht mit der EGS-Build
+kompatibel. Ein anderer Modder hat passende AOBs/RVAs angekündigt; sie liegen
+hier noch nicht validiert vor. Steam-/EGS-Builds getrennt erkennen und prüfen.
+Bei nicht passender Build oder unvollständiger Patch-Validierung Mod komplett
+inaktiv lassen, vorhandene Teilaktivierung sauber zurücknehmen und einen
+kompakten Debug-Fehlerbericht ausgeben. Keine ungeprüften Offsets übernehmen.
+
+NÄCHSTER KONKRETER SCHRITT
+Mit unveränderter V2 weitere kurze kombinierte Boden-/Luft-/Waffenwechsel-
+Tests durchführen und sichtbare Richtung/Beine prüfen. Danach Input-Remapping
+und die noch offenen Lebenszyklusfälle abarbeiten. Eine neue Probe nur bei
+konkreter Beobachtung oder fehlender entscheidender Diagnose erstellen.
+
+NACHTRAG – FEUERÜBERGANG / DEZENTER ROTATIONSRUCK
+Bericht: player_camera_relative_combined_ground_live_v2_20261008_042151_368143.json
+USER_STOP, keine Fehler, Cleanup vollständig. QA beobachtet beim Feuern aus
+seitlicher/rückwärtiger freier Bewegung ein kurzes Zucken zur Kamerarichtung.
+
+Konkreter Rohdatenbefund beim letzten Schuss:
+- Update 1413: COMBAT_AIM, Körper etwa 142,40 Grad.
+- Update 1414: Trigger bereits losgelassen, animation_is_firing noch false,
+  WeaponState bereits Using. combat.active fällt trotzdem auf false.
+  MOVEMENT_FOLLOW dreht den Körper auf etwa 133,14 Grad: 9,26 Grad zurück.
+- Update 1415: animation_is_firing=true; COMBAT_AIM dreht wieder auf142,18 Grad.
+Damit ist ein tatsächlicher kurzer Wechsel zwischen beiden Rotationszielen
+belegt. Die gleiche Erkennungslücke erscheint in mehreren Combat-Transitions.
+Das beweist nicht, dass jedes sichtbare Zucken ausschließlich hiervon kommt.
+
+Nächste gezielte Arbeit: Feuerübergabe vom nativen Feuerbeginn bis zur
+zugehörigen Ausführungsphase stabil halten, ohne Frame-Lücke zurück zu freier
+Bewegung. Keine pauschale Gleichsetzung jedes Using-Zustands mit Feuer, keine
+hartcodierte Trigger-Abfrage, keine willkürliche Timer-Verzögerung. Native
+Feueraktionen/WeaponState/Animationsübergänge gemeinsam prüfen. Anschließend
+gezielter Vergleich und Regression für ADS, Nachladen, Waffenwechsel sowie
+Rückkehr zur Bewegungsrichtung nach Ende des Feuerablaufs. Fix noch offen.
+
+NACHTRAG – FAHRZEUG-REGRESSION V2 / GEZIELTE V3
+Bericht: player_camera_relative_combined_ground_live_v2_20261008_042441_359513.json
+CLIENT_RESTART_PRE mit NewPawn=OakVehicle. Cleanup meldet Local player or
+camera changed in ground clips. Native Patches und SDK-Hooks am Ende 0;
+drei Boden-Clip-Belegungen, nur zwei wiederhergestellt. ground_clip_restore_
+verified=false, cleanup_complete=false. Restliche Wiederherstellung bestätigt.
+
+Ursache: Neue Boden-Clip-Wiederherstellung rief clip_anim() und damit bound()
+auf; bound prüft aktuelle lokale Player-/Camera-Identität, die beim Fahrzeug-
+Übergang bereits anders ist. V3 speichert ursprünglichen Pawn und Mesh beim
+Clip-Snapshot. Cleanup prüft diese WeakRefs und die exakte Pawn.Mesh ->
+Mesh.AnimScriptInstance-Beziehung, unabhängig vom aktuellen Runtime-Pawn.
+Abgelaufene oder veränderte ursprüngliche Owner werden weiterhin abgelehnt.
+Lokale Prüfung mit absichtlich geändertem Runtime-Pawn besteht; Runtime-
+Nachweis des V3-Fahrzeug-Übergangs steht aus. Feuer-Ruck in V3 noch unverändert.
+Neue Probe: player_camera_relative_combined_ground_live_v3.py.
+Nächster Test: Bewegen -> Fahrzeug rufen/benutzen -> aussteigen -> bewegen ->
+manuell stoppen. Vollständiger Neustart vor V3 nach dem V2-Cleanup-Konflikt.
+
+V3-FAHRZEUGTEST BESTÄTIGT
+Bericht: player_camera_relative_combined_ground_live_v3_20261008_043557_939374.json
+USER_STOP nach 13,76 Sekunden, keine Fehler, Cleanup vollständig, am Ende
+SDK-Hooks/native Patches 0. Erste Sitzung endete mit CLIENT_RESTART_NATIVE_
+HANDOFF und allen Wiederherstellungen true, einschließlich Boden-Clips.
+Nach dem Fahrzeug wurde eine zweite On-Foot-Sitzung an neue Player-/Pawn-/
+Camera-/Movement-Identitäten gebunden. Zweite Sitzung sauber manuell beendet,
+Boden-Clips einmal gesetzt/einmal wiederhergestellt. Fahrzeug-Regression für
+diesen Ablauf damit behoben; weitere Fahrzeug-/Lebenszyklusvarianten offen.
+
+Zusätzlicher Diagnosebefund: gleiche VEHICLE_NATIVE/WAITING_GROUNDED-Ereignisse
+werden pro Update gespeichert und verdrängen frühe Ereignisse im 256er-Tail.
+Bei Produktionsintegration Zustandsereignisse nur an Kanten speichern, sonst
+optional aggregierte Zähler. Keine neue Gameplay-Probe allein dafür nötig.
+Nächste gezielte Gameplay-Korrektur bleibt der belegte Feuerübergangs-Ruck.
+
+LUFT-AUSWEICHEN – GAMEPLAY-PRIORITÄT
+QA meldet erschwertes Entkommen aus gegnerischem Gravitationssog, weil unser
+Luftdash Körperblickrichtung erzwingt und native seitliche/rückwärtige
+Ausweichrichtungen ersetzt. Sog selbst noch nicht aufgezeichnet.
+Kontrollversuch ohne Sog:
+player_camera_relative_combined_ground_live_v3_20261008_045016_837482.json
+Vorwärts laufen -> Doppelsprung -> Stick links beim Fallen -> Luftdash.
+Beim Druck Update206: Eingaberichtung19,90 Grad, Geschwindigkeit/Körperziel
+84,91 Grad, Differenz65,01 Grad. Nativer Handler enum1 (links), unsere
+Korrektur erfasst BODY_YAW_AT_CIRCLE_EDGE und damit84,91 Grad. Dash vollständig
+nativ beendet, keine Fehler, Cleanup vollständig. Vor dem Druck folgt Körper
+jeweils der langsam schwenkenden Geschwindigkeit um etwa1–2 Grad pro Update.
+Die 540-Grad/s-Grenze ist in diesem Ausschnitt nicht der wesentliche Engpass;
+der Zielvektor selbst ändert sich langsam. Allein Drehrate erhöhen reicht nicht.
+
+Nächste Entscheidung/Test: Luftdash wieder aus beabsichtigter nativer
+Bewegungseingabe beim Druck bestimmen; unabhängiger von Schwung/externem Sog.
+Passende Körperausrichtung und Animationspose müssen gemeinsam korrigiert
+werden, um den früheren Bein-Konflikt nicht wieder einzuführen. Ohne
+Bewegungseingabe geeigneten Fallback definieren. Keine Änderung an nativer
+Flugphysik/Sog/Charges ohne gezielten Anlass. Änderung noch nicht umgesetzt.
+Dieser Gameplay-Punkt hat Vorrang vor dem kosmetischen Feuer-Ruck.
+
+
+NEUE BEGRENZTE DESIGNÄNDERUNG: LUFTDASH AUS BEWEGUNGSEINGABE
+Probe: player_camera_relative_air_input_live.py (Basis CombinedGroundLive V3).
+Manueller Start/Stop, kein Zeitlimit; vorhandene Lifecycle-/Cleanup-Korrekturen
+bleiben erhalten. Nur Luftdash-Ziel und zugehörige Körperausrichtung geändert.
+Beim erkannten Luftdash-Druck wird LastMovementInput horizontal normalisiert.
+Körper wird auf dessen Yaw ausgerichtet, Setter/Readback geprüft, danach
+werden vorhandene native Enum-Kompensation und aktuelle Forward-Clips genutzt.
+Das Ziel bleibt bis zum nativen Ende/Abbruch unveränderlich; Combat hat Vorrang.
+Normale freie Fall-Drehung und native Flugphysik bleiben unverändert.
+Vorhandene Eingabe-/Mindeststärke-Gates bleiben erhalten: ohne aktive Bewegung
+wird keine zusätzliche Luftdash-Korrektur erzwungen. Interner Fallback ist
+Körper-Yaw, falls die Zielermittlung ohne gültigen Vektor erreicht wird.
+Native Zulassung, Charges und Cooldown werden weiterhin nicht erzwungen.
+
+Lokale Prüfung bestanden: 36 Ziel-/Enum-Kombinationen, normierter Vektor,
+Kompensation aller vier nativen Enums, Fallback, fehlgeschlagener Readback
+vor Veröffentlichung, unveränderliches Dash-Ziel, Combat-Vorrang, normale
+540-Grad/s-Fall-Drehung. Native Hook-Klassen und Binärtemplates unverändert.
+Keine Windows-Laufzeitprüfung hier möglich; noch KEIN belegter Gameplay-Fix.
+Nächster Test: Doppelsprung, beim Fallen Stick links/rechts/hinten, dann Circle;
+Dash soll der neuen Eingaberichtung folgen und komplette Forward-Pose haben.
+Danach Diagonale und Vergleich mit Tastatur/native Dash-Aktion. Erst dann
+Langzeittest/Gravitationssog. Bestehende Roh-Key-Abfragen sind weiterhin
+Probe-/Input-Refactoring-Schuld und nicht für finale QA freigegeben.
+
+
+AUFRÄUMAUFTRAG – MODULARES VALIDIERUNGSPAKET
+Stand: 08.10.2026, player_omnidirectional_gameplay.py.
+Basis ausdrücklich CombinedGroundLive V3; separate AirInputLive-Designänderung
+nicht übernommen. 33 historische Probe-Klassen durch eine Session mit
+expliziten Methoden/Stufen und getrennten Modulen ersetzt. Eingaben,
+Lifecycle, Animation, Boden, Luft, Slide, Ground Slam und native Worker
+getrennt. Native Worker/Template-Implementierungen unverändert übernommen;
+45 native Entitäten per AST-Hash gegen V3 geprüft.
+
+Physische Standard-Keybinds aus diesem Probe-Paket entfernt, einschließlich
+Combat und Lifecycle-Freigaben. Aktuelle lokale EnhancedActionMappings liefern
+konfigurierten Eingabewunsch für Sprint/Dash/Crouch/Jump/Fire/Zoom. Bewegung
+kommt vom nativen horizontalen Pawn-Eingabevektor. Native Callback-Zulassung,
+Charges und Cooldown bleiben erhalten. Die Mapping-Abfrage emuliert keine
+Enhanced-Input-Trigger; Chord/Combo wird ohne Ersatzbelegung abgelehnt.
+SDK-Schema und Action-Asset-Identität werden geprüft; keine Build-Kompatibilität
+über Steam/EGS hinweg behauptet. Bestehende Hauptmod-ADS-Hardcodes nicht durch
+diese eigenständige Probe repariert; eigener Auftrag vor QA erforderlich.
+
+Stop zentralisiert: jede unabhängige Wiederherstellung und jeder native Stop
+wird versucht, auch wenn eine frühe Wiederherstellung scheitert. Gameplay-
+Subscription wird entfernt; verbleibende native Worker ehrlich gezählt.
+Fehlerbericht und expliziter Wiederholungsversuch bleiben möglich; inaktiv
+nach Fehler, keine ständig wiederholte Tick-Fehlerausgabe. Historische
+Lifecycle-Warteereignisse werden nur an Zustandskanten aufgenommen.
+Ausführliche Pose-Diagnose standardmäßig deaktiviert; begrenzte Basisberichte
+bleiben. Historische Messfeldnamen bleiben zur Vergleichbarkeit erhalten.
+
+15 lokale SDK-Stub-Tests bestanden: Mappingwechsel mit gleicher Anzahl,
+mehrere Bindings, ignorierte Mappings, finite Werte, Schema/Owner-Gates,
+ursprüngliche Clip-Owner, Cleanup trotz Clipfehler, native Stopfehler mit
+Retry, Bericht/Hook-Zählung und Lifecycle-Ereignisse. Paketimport,
+Initialisierung, explizite Methodenauflösung und Syntax geprüft.
+Noch KEINE Windows-/BL4-Laufzeitprüfung dieses Refactorings.
+
+NÄCHSTE FREIGABE-GATES
+1. Mapping-SDK-Anbindung im Spiel bestätigen; danach echte umbelegte Aktionen
+   einschließlich Remapping bei laufender Probe testen. Keine alten Tasten
+   als Fallback zulassen. Leistung des Mapping-Scans prüfen.
+2. Kurzer Tastatur-/Controller-Regressionstest für manuelles Sprinten,
+   wiederholte Sprint-Dashes, native Crouch/Dash-Kontexte und Luftdash.
+   Insbesondere Shift/native Dash vs. Circle/native Crouch und deren Timing
+   sowie gemeinsamen Luftdash-Kontext getrennt belegen.
+3. Waffenwechsel, Menü/Fahrzeug, Mantle/Greifhaken/Leiter/Kletterwand, Jump,
+   Slide und GroundSlamExit erneut prüfen; Stopbericht muss vollständiges
+   Cleanup und 0 eigene Hooks/Patches melden.
+4. Luft-Ausweich-Design separat testen und erst danach integrieren. Aktuelle
+   Cleanup-Probe behält V3-Körperblickrichtung beim Luftdash. Kosmetischer
+   Feuerübergangs-Ruck weiterhin offen.
+5. FFYL/Second Wind, Tod/Respawn, Fast Travel, Save Load/Hauptmenü prüfen;
+   Build-Fail-Closed/EGS-Unterstützung, Feature-Toggle, Menübeschreibung und
+   Hauptmod-Remapping vor QA integrieren. Kein Release aus dem Laborpaket.
+
+
+ERSTER CLEANUP-SPIELTEST – STARTIMPORT KORRIGIERT
+Bericht: player_omnidirectional_gameplay_20261008_053953_558844.json.
+MANUAL_TRIAL_FAILED vor dem ersten Gameplay-Sample: NameError für threading
+im ausgelagerten ground.py. Reiner Refactoring-Importfehler. Slide-Einstellung
+wurde wiederhergestellt, finale SDK-Hooks und native Patches jeweils 0,
+alle gemeldeten Wiederherstellungsprüfungen true. Eingabeschema/Lifecycle-
+Rebind wurde erreicht; kein bestätigter Gameplay-/Remapping-Lauf.
+Import ergänzt, zusätzliche Prüfung globaler Modul-Abhängigkeiten über alle
+verschachtelten Methoden. Nun 16 lokale Tests bestanden. Native Implementie-
+rungen unverändert. Paket ersetzen und Spiel neu starten, um importierte
+alte Module zu verwerfen; danach kurzer Start-/Stop- und Eingabetest.
+
+
+WEITERE FEATURE-ANFRAGE – LOOT-AUFNAHME AM CROSSHAIR
+Aufgenommen: 08.10.2026.
+Erhöhte Loot-Pickup-Erfassung im Bereich um das Crosshair herum prüfen.
+Anlass: Bestimmte Items haben eine sehr schmale Form ("Slender Shape"),
+z.B. Class Mods von Loveless, laut QA dem neuesten Vault Hunter. Dadurch
+sind sie mit dem Crosshair manchmal schwer zu treffen und aufzuheben.
+Ziel: Größere Erfassungstoleranz um das Crosshair für die Loot-Auswahl;
+der Wunsch betrifft nicht automatisch eine größere Aufnahmedistanz.
+Status: Feature-Anfrage aufgenommen; technische Analyse und Umsetzung offen.
+
+
+GEZIELTE LUFTDASH-DIAGONAL-VALIDIERUNG (NEUER CHAT)
+QA bestätigt: fehlerhafte Richtung nur bei vier diagonalen Tastatur-Luftdashes;
+Gamepad Boden/Luft und sonstige Tastatur-Dashes visuell korrekt.
+Bericht 061215: USER_STOP, vollständig aufgeräumt, 0 Hooks/Patches, keine Fehler.
+Drei Luftdash-Velocities weichen ca.45 Grad von der Eingabe ab. Alle vier
+Tastatur-Druckkanten beobachtet, als der native Dash schon aktiv war; keine
+Luft-Vektorkorrekturen/Forward-Clips vorbereitet. V3 enthält denselben Ablauf;
+noch kein Beweis, dass die Modulaufteilung allein die Abweichung verursacht.
+
+Neue gezielte Testkorrektur in air.py: stabile diagonale Luftbewegung innerhalb
+5 Grad zu Kameradiagonale und Körperausrichtung bereitet vorhandene native
+Actual-Enum-Kompensation und Forward-Clips vor Eingabe vor. V3-Körperblickziel
+bleibt; kein AirInputLive-Design integriert. Die Vorbereitung wird bis zur
+nativen Ausführung aktualisiert, danach unveränderlich. Native Charges und
+Zulassung bleiben erhalten; Templates und Adressen unverändert. Vorbereitung
+bei Waffen/Richtung/Kampf/Lifecycle-Wechsel zurücknehmen. Gamepad-Diagonalen
+werden ebenfalls von dieser Vorbereitung erreicht und müssen verglichen werden.
+Richtungsänderung direkt im selben Inputdurchlauf ist damit nicht gelöst.
+22 lokale Tests bestehen; kein Windows-/Gameplay-Nachweis dieser Änderung.
+Nächster Test: vier stabile Tastatur-Luftdiagonalen, Hauptrichtungen, Gamepad-
+Vergleich, Sprung ohne Dash, Waffenwechsel in Luft, Stop/Cleanup-Bericht.
+
+Bisherige Cleanup-Läufe im neuen Chat: 055151 fehlerfrei mit vollständigem
+Cleanup, 37/37 Boden- und16/16 Luft-Clip-Wiederherstellungen. 060750 zeigt
+umgelegte Sprint/Dash=Space und Jump=Shift bereits ab Start; 6 Boden-Dashes,
+11/11 Clip-Wiederherstellungen, vollständiges Cleanup. Wechsel innerhalb
+laufender Aufnahme bleibt nicht belegt. 061033 Fahrzeug-Ein/Ausstieg: beide
+Sitzungen fehlerfrei wiederhergestellt, On-Foot neu gebunden, Stop vollständig.
+QA bestätigt Gerätewechsel visuell; Diagnose unterscheidet Geräte nicht.
+DASH_REQUEST_NOT_STARTED bei leerem Meter im Spieltest gezielt reproduziert;
+kein belegter Ressourcen-Bypass oder daraus abzuleitender Mod-Fehler.
+
+
+AKTUELLE DESIGNÄNDERUNG – FREIE LUFTAUSRICHTUNG UND NATIVER INPUT-LUFTDASH
+Stand: 08.10.2026, auf ausdrücklichen Wunsch aus der QA nach erfolgreichem
+Diagonal-Prearm-Test. QA meldet die Dashes nun visuell korrekt, aber langsame
+Free-Fall-Körperdrehung störend. Vorherige 540 Grad/s und Geschwindigkeitsziel
+werden in der freien Luftausrichtung durch aktuelle Bewegungseingabe ersetzt.
+Pending-Eingabe hat Vorrang, andernfalls LastMovementInput. Ohne Eingabe letzte
+freie Ausrichtung halten. Combat behält seinen bisherigen Vorrang/Drehpfad.
+
+Neue LiveAirInputTrace erweitert den vorhandenen, vollständig fingerprint-
+geschützten nativen Vektor-Helper um Phase4. Lokaler Movement-Owner, Game-Thread,
+exakter Caller, native Luftmode/Dash-Wish, aktuelle Config und Enum prüfen.
+Pawn.ControlInputVector und Pawn.LastControlInputVector werden über das
+SDK-Schema aufgelöst: FVector Double X/Y/Z, Offsets0/8/16. Feld-Offsets sind
+runtime-reflektiert, nicht geraten. Source-Pages, Weak-Owner und SDK/native
+Readback validieren. Pending Input beim nativen Helper horizontal normalisieren;
+bei leerem Pending Last Input verwenden. Keine gültige Bewegung: nativen Vektor
+unverändert lassen. Tatsächliches natives Enum kompensieren, Richtung genau
+einmal nativ erfassen und bis zum Dash-Ende festhalten. Ein weiterer Druck
+während eines laufenden Dashes ändert diesen Zielvektor nicht.
+
+Air-Forward-Clips vorher für frei airborne und stabil ausgerüstete Active-
+Waffe bereitstellen, auch vor einer neuen Eingabe. Waffenwechsel und Reloading
+nehmen die Vorbereitung zurück; zwischen unsettled Waffen-/Kampfzuständen
+wird weiterhin keine erzwungene Dash-Korrektur zugesichert. Keine Änderung
+an nativer Flugphysik, Sog, Charges, Cooldowns oder Zulassung.
+
+26 lokale Python/SDK-Stub-Tests bestanden. Neuer Maschinencode im isolierten
+Linux-x64-Fixture tatsächlich ausgeführt: 192 Richtung/Enum/Source-Fälle,
+One-Shot, Null/Nonfinite-/Grenzwert-Eingaben und7 Schutzgates bestanden.
+Originale V3-Worker bleiben unverändert; neue Phase4-Erweiterung separat.
+KEINE Windows-/BL4-Laufzeitvalidierung dieser Build. Source-Schema-Anbindung,
+Runtime-Input-Reihenfolge und Körper-/Beinpose müssen im Spiel bestätigt werden.
+Der erfasste Vektor ist der vom Spiel bereitgestellte Movement-Input am
+nativen Helper; keine Behauptung über noch nicht dispatchte physische Keys.
+
+Nächster Test: Freier Fall mit schnellen Richtungs-/Mauswechseln; unmittelbar
+Richtung wechseln und Dash drücken, insbesondere links/rechts/hinten und
+alle vier Tastaturdiagonalen, danach Gamepad. Körper/Pose und Geschwindigkeit
+prüfen. Dash ohne Bewegungseingabe und leeres Meter vergleichen. Native Ende,
+Landung, Waffenwechsel und manuellen Stop prüfen. Erfolgreicher Bericht muss
+AIR_INPUT_CAPTURED_NATIVE mit desired_input_vector/input_source und native
+Start/Ende sowie vollständiges Cleanup und0 Hooks/Patches zeigen.
+
+
+AKTUELLER STATUS – 08.10.2026, SPRINT/FIRE-HANDOFF
+CrouchIdle-Scope: QA bestätigt Crouch und Aufstehen ohne Rotationszucken.
+TPS/FPS/TPS vorerst fehlerfrei; AirInput visuell bestätigt.
+Polishing-Zucken präzisiert: ausschließlich Sprint/Feuer-Animationswechsel,
+normales Laufen/Rennen ohne Zucken. Diagnose184755 zeigt vier verzögerte
+Sprint-Schüsse mit kurzer Combat-Lücke vor bIsFiring. Neue zustandsbasierte
+SprintFireHandoff überbrückt diese Lücke ohne Timer.46 lokale Tests bestanden;
+512-Sample-Replay überbrückt19 Updates in vier Übergaben. Spieltest offen.
+Weiter offen: optische Luftdrehungs-Glättung; native begrenzte Oberkörper-
+ausrichtung untersuchen; separate Loot-Auswahltoleranz um das Crosshair.
+
+SPRINT/FIRE-HANDOFF v2 – SPIELTEST191600
+Erste Handoff-Build beendet alle drei Übergaben zu früh: bWantsToSprint fällt
+auch bei gültigem verzögertem Schuss. v2 entfernt dieses Flag als Abbruchgrund
+nach Arming.46 Tests; Replay beider Logs mit sieben ausgeführten und danach
+freigegebenen Übergaben. Neue visuelle Validierung sowie abgelehnte Schüsse
+(leeres Magazin/keine Reserve) noch offen.
+
+WEITERE FEATURE-ANFRAGE
+Bei Special Ability (Default F/L1) und Granaten (Default G/R1) Character
+zur Kamerablickrichtung drehen; tatsächliche konfigurierte Aktionen beachten.
+Ausführungs-/Abbruchereignisse per SDK noch zu identifizieren.

@@ -1,0 +1,1383 @@
+{
+  "baseline": "player_camera_relative_combined_ground_live_v3.py",
+  "original_class_chain": [
+    "CombinedGroundGameplayLive",
+    "GroundDashInputPoseObserver",
+    "UnifiedGameplayLive",
+    "GroundSlamPoseAB",
+    "GroundSlamNativeRotationAB",
+    "GroundSlamNativeRotationObserver",
+    "JumpIdleTurnsAB",
+    "SpecialStatesGameplayLive",
+    "CameraRelativeGameplayLive",
+    "SlideHeadPoseObserver",
+    "SlideBodyCallerAB",
+    "SlideRotateStateObserver",
+    "SDKSlideDirectionLive",
+    "NativeCircleVectorLive",
+    "NativeCircleEntryObserver",
+    "GetterClipTest",
+    "GroundCircleAirLive",
+    "AirDashForwardClipLive",
+    "AirDashAnimationObserver",
+    "AirTransitionRuntime",
+    "TransitionRuntime",
+    "VectorRuntime",
+    "ManualSprintDash",
+    "SprintLive",
+    "BodyLive",
+    "LeanBlendAB",
+    "FocusedPlayerObserver",
+    "AimYawFollowAB",
+    "AnimationDirectionAB",
+    "VisualRotationAB",
+    "TurnStateBlockAB",
+    "TraceCapture",
+    "Capture"
+  ],
+  "reachable_method_variants": 179,
+  "removed_method_variants": [
+    [
+      "GroundSlamPoseAB",
+      "finish"
+    ],
+    [
+      "GroundSlamNativeRotationAB",
+      "finish"
+    ],
+    [
+      "GroundSlamNativeRotationObserver",
+      "finish"
+    ],
+    [
+      "JumpIdleTurnsAB",
+      "finish"
+    ],
+    [
+      "CameraRelativeGameplayLive",
+      "finish"
+    ],
+    [
+      "SlideBodyCallerAB",
+      "frame"
+    ],
+    [
+      "SlideBodyCallerAB",
+      "finish"
+    ],
+    [
+      "SDKSlideDirectionLive",
+      "finish"
+    ],
+    [
+      "NativeCircleVectorLive",
+      "finish"
+    ],
+    [
+      "NativeCircleEntryObserver",
+      "finish"
+    ],
+    [
+      "AirDashForwardClipLive",
+      "swap_forward_clips"
+    ],
+    [
+      "AirDashForwardClipLive",
+      "restore_clips"
+    ],
+    [
+      "AirDashForwardClipLive",
+      "prepare_air_cycle"
+    ],
+    [
+      "AirDashForwardClipLive",
+      "finish"
+    ],
+    [
+      "AirTransitionRuntime",
+      "air_frame_observe"
+    ],
+    [
+      "AirTransitionRuntime",
+      "finish"
+    ],
+    [
+      "VectorRuntime",
+      "verify_sprint_restore"
+    ],
+    [
+      "VectorRuntime",
+      "finish"
+    ],
+    [
+      "ManualSprintDash",
+      "verify_sprint_restore"
+    ],
+    [
+      "ManualSprintDash",
+      "finish"
+    ],
+    [
+      "SprintLive",
+      "verify_sprint_restore"
+    ],
+    [
+      "SprintLive",
+      "frame"
+    ],
+    [
+      "SprintLive",
+      "finish"
+    ],
+    [
+      "LeanBlendAB",
+      "frame"
+    ],
+    [
+      "LeanBlendAB",
+      "finish"
+    ],
+    [
+      "AimYawFollowAB",
+      "finish"
+    ],
+    [
+      "TurnStateBlockAB",
+      "finish"
+    ],
+    [
+      "TraceCapture",
+      "finish"
+    ],
+    [
+      "Capture",
+      "finish"
+    ]
+  ],
+  "implementations": [
+    {
+      "original": [
+        "GroundSlamPoseAB",
+        "close_slam"
+      ],
+      "current": "close_slam",
+      "module": "slam"
+    },
+    {
+      "original": [
+        "GetterClipTest",
+        "observe_clip_timing"
+      ],
+      "current": "observe_clip_timing",
+      "module": "diagnostics"
+    },
+    {
+      "original": [
+        "AirTransitionRuntime",
+        "resume_handoff"
+      ],
+      "current": "resume_handoff",
+      "module": "air"
+    },
+    {
+      "original": [
+        "AirTransitionRuntime",
+        "air_frame"
+      ],
+      "current": "air_frame",
+      "module": "air"
+    },
+    {
+      "original": [
+        "SpecialStatesGameplayLive",
+        "enter_special"
+      ],
+      "current": "enter_special",
+      "module": "session"
+    },
+    {
+      "original": [
+        "ManualSprintDash",
+        "recycle_diagnostics"
+      ],
+      "current": "recycle_diagnostics",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "GroundSlamPoseAB",
+        "disarm_slam_pose"
+      ],
+      "current": "disarm_slam_pose",
+      "module": "slam"
+    },
+    {
+      "original": [
+        "ManualSprintDash",
+        "prepare_native"
+      ],
+      "current": "prepare_native",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "ManualSprintDash",
+        "clear_request"
+      ],
+      "current": "clear_request",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "CombinedGroundGameplayLive",
+        "prepare_air_cycle"
+      ],
+      "current": "prepare_air_cycle",
+      "module": "session"
+    },
+    {
+      "original": [
+        "SlideHeadPoseObserver",
+        "install"
+      ],
+      "current": "install",
+      "module": "session"
+    },
+    {
+      "original": [
+        "BodyLive",
+        "frame"
+      ],
+      "current": "_lean_live_frame",
+      "module": "animation"
+    },
+    {
+      "original": [
+        "SlideHeadPoseObserver",
+        "frame"
+      ],
+      "current": "_slide_pose_frame",
+      "module": "slide"
+    },
+    {
+      "original": [
+        "Capture",
+        "optional"
+      ],
+      "current": "optional",
+      "module": "sampling"
+    },
+    {
+      "original": [
+        "NativeCircleVectorLive",
+        "consume_entry"
+      ],
+      "current": "consume_entry",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "SprintLive",
+        "restore_sprint_intent"
+      ],
+      "current": "restore_sprint_intent",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "NativeCircleVectorLive",
+        "accept_native_arm"
+      ],
+      "current": "accept_native_arm",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "Capture",
+        "install"
+      ],
+      "current": "_sample_install",
+      "module": "session"
+    },
+    {
+      "original": [
+        "VectorRuntime",
+        "request_dash"
+      ],
+      "current": "request_dash",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "AirDashForwardClipLive",
+        "clip_anim"
+      ],
+      "current": "clip_anim",
+      "module": "animation"
+    },
+    {
+      "original": [
+        "TransitionRuntime",
+        "frame"
+      ],
+      "current": "_handoff_frame",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "TraceCapture",
+        "install"
+      ],
+      "current": "_root_install",
+      "module": "session"
+    },
+    {
+      "original": [
+        "AimYawFollowAB",
+        "read_combat"
+      ],
+      "current": "read_combat",
+      "module": "animation"
+    },
+    {
+      "original": [
+        "Capture",
+        "frame"
+      ],
+      "current": "_sample_frame",
+      "module": "sampling"
+    },
+    {
+      "original": [
+        "ManualSprintDash",
+        "consume_route"
+      ],
+      "current": "consume_route",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "CombinedGroundGameplayLive",
+        "ground_clip_anim"
+      ],
+      "current": "ground_clip_anim",
+      "module": "animation"
+    },
+    {
+      "original": [
+        "TraceCapture",
+        "frame"
+      ],
+      "current": "_root_frame",
+      "module": "sampling"
+    },
+    {
+      "original": [
+        "TransitionRuntime",
+        "disable_handoff_overrides"
+      ],
+      "current": "_handoff_disable_handoff_overrides",
+      "module": "session"
+    },
+    {
+      "original": [
+        "NativeCircleVectorLive",
+        "close_ground_trial"
+      ],
+      "current": "close_ground_trial",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "SprintLive",
+        "bind_visual"
+      ],
+      "current": "bind_visual",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "CombinedGroundGameplayLive",
+        "swap_ground_forward_clips"
+      ],
+      "current": "swap_ground_forward_clips",
+      "module": "animation"
+    },
+    {
+      "original": [
+        "UnifiedGameplayLive",
+        "frame"
+      ],
+      "current": "_input_source_frame",
+      "module": "session"
+    },
+    {
+      "original": [
+        "CombinedGroundGameplayLive",
+        "frame"
+      ],
+      "current": "frame",
+      "module": "session"
+    },
+    {
+      "original": [
+        "SlideHeadPoseObserver",
+        "capture_head"
+      ],
+      "current": "_slide_pose_capture_head",
+      "module": "diagnostics"
+    },
+    {
+      "original": [
+        "ManualSprintDash",
+        "request_dash"
+      ],
+      "current": "_manual_dash_request_dash",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "AirDashForwardClipLive",
+        "clip_event"
+      ],
+      "current": "clip_event",
+      "module": "diagnostics"
+    },
+    {
+      "original": [
+        "LeanBlendAB",
+        "restore_blend"
+      ],
+      "current": "restore_blend",
+      "module": "animation"
+    },
+    {
+      "original": [
+        "NativeCircleVectorLive",
+        "publish_trial"
+      ],
+      "current": "publish_trial",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "LeanBlendAB",
+        "blend_node"
+      ],
+      "current": "blend_node",
+      "module": "animation"
+    },
+    {
+      "original": [
+        "GroundSlamNativeRotationAB",
+        "disarm_slam_override"
+      ],
+      "current": "disarm_slam_override",
+      "module": "slam"
+    },
+    {
+      "original": [
+        "CombinedGroundGameplayLive",
+        "ground_clip_event"
+      ],
+      "current": "ground_clip_event",
+      "module": "diagnostics"
+    },
+    {
+      "original": [
+        "VectorRuntime",
+        "owners"
+      ],
+      "current": "owners",
+      "module": "session"
+    },
+    {
+      "original": [
+        "ManualSprintDash",
+        "validate_handler"
+      ],
+      "current": "validate_handler",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "AirTransitionRuntime",
+        "air_live_event"
+      ],
+      "current": "air_live_event",
+      "module": "diagnostics"
+    },
+    {
+      "original": [
+        "SDKSlideDirectionLive",
+        "verify_slide"
+      ],
+      "current": "verify_slide",
+      "module": "slide"
+    },
+    {
+      "original": [
+        "GroundCircleAirLive",
+        "frame"
+      ],
+      "current": "_ground_action_frame",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "ManualSprintDash",
+        "event"
+      ],
+      "current": "event",
+      "module": "diagnostics"
+    },
+    {
+      "original": [
+        "GroundSlamNativeRotationAB",
+        "paused_special_frame"
+      ],
+      "current": "_slam_body_paused_special_frame",
+      "module": "slam"
+    },
+    {
+      "original": [
+        "SDKSlideDirectionLive",
+        "observe_slide"
+      ],
+      "current": "observe_slide",
+      "module": "diagnostics"
+    },
+    {
+      "original": [
+        "VectorRuntime",
+        "frame"
+      ],
+      "current": "_dash_vector_frame",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "LeanBlendAB",
+        "bind_visual"
+      ],
+      "current": "_lean_bind_visual",
+      "module": "animation"
+    },
+    {
+      "original": [
+        "FocusedPlayerObserver",
+        "visual"
+      ],
+      "current": "visual",
+      "module": "diagnostics"
+    },
+    {
+      "original": [
+        "SlideRotateStateObserver",
+        "validate_rotate_schema"
+      ],
+      "current": "validate_rotate_schema",
+      "module": "slide"
+    },
+    {
+      "original": [
+        "SpecialStatesGameplayLive",
+        "paused_special_frame"
+      ],
+      "current": "_special_paused_special_frame",
+      "module": "session"
+    },
+    {
+      "original": [
+        "FocusedPlayerObserver",
+        "bind_visual"
+      ],
+      "current": "_player_bind_visual",
+      "module": "animation"
+    },
+    {
+      "original": [
+        "TurnStateBlockAB",
+        "set_rotation"
+      ],
+      "current": "set_rotation",
+      "module": "sampling"
+    },
+    {
+      "original": [
+        "NativeCircleEntryObserver",
+        "frame"
+      ],
+      "current": "_native_entry_frame",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "ManualSprintDash",
+        "owners"
+      ],
+      "current": "_manual_dash_owners",
+      "module": "session"
+    },
+    {
+      "original": [
+        "CombinedGroundGameplayLive",
+        "disable_special_controls"
+      ],
+      "current": "disable_special_controls",
+      "module": "session"
+    },
+    {
+      "original": [
+        "Capture",
+        "jump_down"
+      ],
+      "current": "jump_down",
+      "module": "sampling"
+    },
+    {
+      "original": [
+        "TransitionRuntime",
+        "classify_handoff"
+      ],
+      "current": "_handoff_classify_handoff",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "CombinedGroundGameplayLive",
+        "restore_body_rotation"
+      ],
+      "current": "restore_body_rotation",
+      "module": "session"
+    },
+    {
+      "original": [
+        "ManualSprintDash",
+        "install"
+      ],
+      "current": "_manual_dash_install",
+      "module": "session"
+    },
+    {
+      "original": [
+        "AirTransitionRuntime",
+        "close_air_cycle"
+      ],
+      "current": "_air_close_air_cycle",
+      "module": "air"
+    },
+    {
+      "original": [
+        "SprintLive",
+        "install"
+      ],
+      "current": "_sprint_install",
+      "module": "session"
+    },
+    {
+      "original": [
+        "CombinedGroundGameplayLive",
+        "restore_ground_clips"
+      ],
+      "current": "restore_ground_clips",
+      "module": "animation"
+    },
+    {
+      "original": [
+        "NativeCircleEntryObserver",
+        "entry_counters"
+      ],
+      "current": "_native_entry_entry_counters",
+      "module": "diagnostics"
+    },
+    {
+      "original": [
+        "VisualRotationAB",
+        "frame"
+      ],
+      "current": "_visual_frame",
+      "module": "animation"
+    },
+    {
+      "original": [
+        "ManualSprintDash",
+        "frame"
+      ],
+      "current": "_manual_dash_frame",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "AirTransitionRuntime",
+        "paused_frame"
+      ],
+      "current": "_air_paused_frame",
+      "module": "air"
+    },
+    {
+      "original": [
+        "AirTransitionRuntime",
+        "prepare_air_cycle"
+      ],
+      "current": "_air_prepare_air_cycle",
+      "module": "air"
+    },
+    {
+      "original": [
+        "TurnStateBlockAB",
+        "install"
+      ],
+      "current": "_body_install",
+      "module": "session"
+    },
+    {
+      "original": [
+        "SlideBodyCallerAB",
+        "paused_frame"
+      ],
+      "current": "_slide_body_paused_frame",
+      "module": "slide"
+    },
+    {
+      "original": [
+        "GroundDashInputPoseObserver",
+        "observe_ground_input_pose"
+      ],
+      "current": "observe_ground_input_pose",
+      "module": "diagnostics"
+    },
+    {
+      "original": [
+        "JumpIdleTurnsAB",
+        "close_jump"
+      ],
+      "current": "close_jump",
+      "module": "air"
+    },
+    {
+      "original": [
+        "SDKSlideDirectionLive",
+        "write_slide"
+      ],
+      "current": "write_slide",
+      "module": "slide"
+    },
+    {
+      "original": [
+        "JumpIdleTurnsAB",
+        "frame"
+      ],
+      "current": "_jump_frame",
+      "module": "air"
+    },
+    {
+      "original": [
+        "CombinedGroundGameplayLive",
+        "disarm_ground_vector"
+      ],
+      "current": "disarm_ground_vector",
+      "module": "session"
+    },
+    {
+      "original": [
+        "TransitionRuntime",
+        "resume_handoff"
+      ],
+      "current": "_handoff_resume_handoff",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "GroundSlamNativeRotationObserver",
+        "paused_special_frame"
+      ],
+      "current": "_slam_state_paused_special_frame",
+      "module": "slam"
+    },
+    {
+      "original": [
+        "SprintLive",
+        "snapshot_sprint"
+      ],
+      "current": "snapshot_sprint",
+      "module": "diagnostics"
+    },
+    {
+      "original": [
+        "AirDashAnimationObserver",
+        "frame"
+      ],
+      "current": "_air_pose_frame",
+      "module": "air"
+    },
+    {
+      "original": [
+        "NativeCircleVectorLive",
+        "record_trial"
+      ],
+      "current": "record_trial",
+      "module": "diagnostics"
+    },
+    {
+      "original": [
+        "AimYawFollowAB",
+        "visual"
+      ],
+      "current": "_combat_visual",
+      "module": "diagnostics"
+    },
+    {
+      "original": [
+        "GroundCircleAirLive",
+        "classify_handoff"
+      ],
+      "current": "classify_handoff",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "GroundDashInputPoseObserver",
+        "frame"
+      ],
+      "current": "_ground_pose_frame",
+      "module": "session"
+    },
+    {
+      "original": [
+        "ManualSprintDash",
+        "trim_diagnostics"
+      ],
+      "current": "trim_diagnostics",
+      "module": "diagnostics"
+    },
+    {
+      "original": [
+        "AimYawFollowAB",
+        "bind_visual"
+      ],
+      "current": "_combat_bind_visual",
+      "module": "animation"
+    },
+    {
+      "original": [
+        "JumpIdleTurnsAB",
+        "air_frame_observe"
+      ],
+      "current": "air_frame_observe",
+      "module": "air"
+    },
+    {
+      "original": [
+        "FocusedPlayerObserver",
+        "read_players"
+      ],
+      "current": "read_players",
+      "module": "diagnostics"
+    },
+    {
+      "original": [
+        "SpecialStatesGameplayLive",
+        "frame"
+      ],
+      "current": "_special_frame",
+      "module": "session"
+    },
+    {
+      "original": [
+        "SpecialStatesGameplayLive",
+        "discard_special_input"
+      ],
+      "current": "discard_special_input",
+      "module": "session"
+    },
+    {
+      "original": [
+        "AirDashForwardClipLive",
+        "close_air_cycle"
+      ],
+      "current": "_air_clips_close_air_cycle",
+      "module": "animation"
+    },
+    {
+      "original": [
+        "SpecialStatesGameplayLive",
+        "save_state_edge"
+      ],
+      "current": "save_state_edge",
+      "module": "diagnostics"
+    },
+    {
+      "original": [
+        "SlideRotateStateObserver",
+        "install"
+      ],
+      "current": "_slide_state_install",
+      "module": "session"
+    },
+    {
+      "original": [
+        "SlideRotateStateObserver",
+        "capture_rotate_state"
+      ],
+      "current": "capture_rotate_state",
+      "module": "diagnostics"
+    },
+    {
+      "original": [
+        "AirTransitionRuntime",
+        "frame"
+      ],
+      "current": "_air_frame",
+      "module": "air"
+    },
+    {
+      "original": [
+        "CameraRelativeGameplayLive",
+        "disable_handoff_overrides"
+      ],
+      "current": "disable_handoff_overrides",
+      "module": "session"
+    },
+    {
+      "original": [
+        "SlideRotateStateObserver",
+        "frame"
+      ],
+      "current": "_slide_state_frame",
+      "module": "slide"
+    },
+    {
+      "original": [
+        "AnimationDirectionAB",
+        "visual"
+      ],
+      "current": "_aim_binding_visual",
+      "module": "diagnostics"
+    },
+    {
+      "original": [
+        "TransitionRuntime",
+        "transition_event"
+      ],
+      "current": "transition_event",
+      "module": "diagnostics"
+    },
+    {
+      "original": [
+        "NativeCircleVectorLive",
+        "frame"
+      ],
+      "current": "_ground_vector_frame",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "GroundSlamNativeRotationAB",
+        "close_slam"
+      ],
+      "current": "_slam_body_close_slam",
+      "module": "slam"
+    },
+    {
+      "original": [
+        "GetterClipTest",
+        "close_air_cycle"
+      ],
+      "current": "close_air_cycle",
+      "module": "animation"
+    },
+    {
+      "original": [
+        "GroundSlamPoseAB",
+        "paused_special_frame"
+      ],
+      "current": "paused_special_frame",
+      "module": "slam"
+    },
+    {
+      "original": [
+        "SDKSlideDirectionLive",
+        "apply_slide"
+      ],
+      "current": "apply_slide",
+      "module": "slide"
+    },
+    {
+      "original": [
+        "AnimationDirectionAB",
+        "bind_visual"
+      ],
+      "current": "_aim_binding_bind_visual",
+      "module": "animation"
+    },
+    {
+      "original": [
+        "AirTransitionRuntime",
+        "use_air_facing"
+      ],
+      "current": "use_air_facing",
+      "module": "air"
+    },
+    {
+      "original": [
+        "GetterClipTest",
+        "validate_getter"
+      ],
+      "current": "validate_getter",
+      "module": "animation"
+    },
+    {
+      "original": [
+        "GetterClipTest",
+        "swap_forward_clips"
+      ],
+      "current": "swap_forward_clips",
+      "module": "animation"
+    },
+    {
+      "original": [
+        "AirTransitionRuntime",
+        "drain_air_vector_records"
+      ],
+      "current": "drain_air_vector_records",
+      "module": "air"
+    },
+    {
+      "original": [
+        "NativeCircleVectorLive",
+        "entry_counters"
+      ],
+      "current": "entry_counters",
+      "module": "diagnostics"
+    },
+    {
+      "original": [
+        "CameraRelativeGameplayLive",
+        "paused_frame"
+      ],
+      "current": "paused_frame",
+      "module": "slide"
+    },
+    {
+      "original": [
+        "Capture",
+        "air_dash_down"
+      ],
+      "current": "air_dash_down",
+      "module": "sampling"
+    },
+    {
+      "original": [
+        "GetterClipTest",
+        "prepare_air_cycle"
+      ],
+      "current": "_clip_lookup_prepare_air_cycle",
+      "module": "animation"
+    },
+    {
+      "original": [
+        "SDKSlideDirectionLive",
+        "frame"
+      ],
+      "current": "_slide_frame",
+      "module": "slide"
+    },
+    {
+      "original": [
+        "CameraRelativeGameplayLive",
+        "capture_head"
+      ],
+      "current": "capture_head",
+      "module": "diagnostics"
+    },
+    {
+      "original": [
+        "SpecialStatesGameplayLive",
+        "disable_special_controls"
+      ],
+      "current": "_special_disable_special_controls",
+      "module": "session"
+    },
+    {
+      "original": [
+        "SpecialStatesGameplayLive",
+        "state_context"
+      ],
+      "current": "state_context",
+      "module": "diagnostics"
+    },
+    {
+      "original": [
+        "TurnStateBlockAB",
+        "frame"
+      ],
+      "current": "_body_frame",
+      "module": "sampling"
+    },
+    {
+      "original": [
+        "CombinedGroundGameplayLive",
+        "prepare_ground"
+      ],
+      "current": "prepare_ground",
+      "module": "session"
+    },
+    {
+      "original": [
+        "GroundSlamNativeRotationObserver",
+        "frame"
+      ],
+      "current": "_slam_state_frame",
+      "module": "slam"
+    },
+    {
+      "original": [
+        "AimYawFollowAB",
+        "install"
+      ],
+      "current": "_combat_install",
+      "module": "session"
+    },
+    {
+      "original": [
+        "Capture",
+        "bound"
+      ],
+      "current": "bound",
+      "module": "sampling"
+    },
+    {
+      "original": [
+        "NativeCircleEntryObserver",
+        "consume_entry"
+      ],
+      "current": "_native_entry_consume_entry",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "AirDashForwardClipLive",
+        "frame"
+      ],
+      "current": "_air_clips_frame",
+      "module": "animation"
+    },
+    {
+      "original": [
+        "AimYawFollowAB",
+        "frame"
+      ],
+      "current": "_combat_frame",
+      "module": "animation"
+    },
+    {
+      "original": [
+        "GroundSlamNativeRotationAB",
+        "frame"
+      ],
+      "current": "_slam_body_frame",
+      "module": "slam"
+    },
+    {
+      "original": [
+        "JumpIdleTurnsAB",
+        "disarm_jump_idle"
+      ],
+      "current": "disarm_jump_idle",
+      "module": "air"
+    },
+    {
+      "original": [
+        "VectorRuntime",
+        "close_cycle"
+      ],
+      "current": "close_cycle",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "GroundSlamNativeRotationObserver",
+        "consume_slam_records"
+      ],
+      "current": "consume_slam_records",
+      "module": "diagnostics"
+    },
+    {
+      "original": [
+        "ManualSprintDash",
+        "trial_cycle"
+      ],
+      "current": "trial_cycle",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "CombinedGroundGameplayLive",
+        "finish"
+      ],
+      "current": "finish",
+      "module": "session"
+    },
+    {
+      "original": [
+        "GroundSlamNativeRotationObserver",
+        "close_slam"
+      ],
+      "current": "_slam_state_close_slam",
+      "module": "slam"
+    },
+    {
+      "original": [
+        "CameraRelativeGameplayLive",
+        "frame"
+      ],
+      "current": "_slide_live_frame",
+      "module": "slide"
+    },
+    {
+      "original": [
+        "GetterClipTest",
+        "air_clip_weapon_binding"
+      ],
+      "current": "air_clip_weapon_binding",
+      "module": "animation"
+    },
+    {
+      "original": [
+        "JumpIdleTurnsAB",
+        "configure_jump_idle"
+      ],
+      "current": "configure_jump_idle",
+      "module": "air"
+    },
+    {
+      "original": [
+        "SDKSlideDirectionLive",
+        "restore_slide"
+      ],
+      "current": "restore_slide",
+      "module": "slide"
+    },
+    {
+      "original": [
+        "GroundSlamPoseAB",
+        "frame"
+      ],
+      "current": "_slam_pose_frame",
+      "module": "slam"
+    },
+    {
+      "original": [
+        "VisualRotationAB",
+        "visual"
+      ],
+      "current": "_visual_visual",
+      "module": "diagnostics"
+    },
+    {
+      "original": [
+        "SlideHeadPoseObserver",
+        "paused_frame"
+      ],
+      "current": "_slide_pose_paused_frame",
+      "module": "slide"
+    },
+    {
+      "original": [
+        "VisualRotationAB",
+        "bind_visual"
+      ],
+      "current": "_visual_bind_visual",
+      "module": "animation"
+    },
+    {
+      "original": [
+        "ManualSprintDash",
+        "close_cycle"
+      ],
+      "current": "_manual_dash_close_cycle",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "NativeCircleVectorLive",
+        "prepare_ground"
+      ],
+      "current": "_ground_vector_prepare_ground",
+      "module": "ground"
+    },
+    {
+      "original": [
+        "GetterClipTest",
+        "restore_clips"
+      ],
+      "current": "restore_clips",
+      "module": "animation"
+    },
+    {
+      "original": [
+        "Capture",
+        "controls_down"
+      ],
+      "current": "controls_down",
+      "module": "sampling"
+    },
+    {
+      "original": [
+        "TransitionRuntime",
+        "paused_frame"
+      ],
+      "current": "_handoff_paused_frame",
+      "module": "ground"
+    }
+  ],
+  "native_entities": [
+    "CAPACITY",
+    "CircleEntry_CAPACITY",
+    "CircleEntry_DASH_TEMPLATE",
+    "CircleEntry_DASH_TEMPLATE_HASH",
+    "CircleEntry_EntryTrace",
+    "CircleEntry_RECORD_SIZE",
+    "CircleEntry_SPRINT_TEMPLATE",
+    "CircleEntry_SPRINT_TEMPLATE_HASH",
+    "DASH_CAPACITY",
+    "DASH_INLINE_HASH",
+    "DASH_INLINE_SPEC",
+    "DASH_INLINE_TEMPLATE",
+    "DASH_RECORD_SIZE",
+    "DASH_TEMPLATE",
+    "DASH_TEMPLATE_HASH",
+    "DASH_TRACE_HASH",
+    "DASH_TRACE_TEMPLATE",
+    "DashBranchTrace",
+    "DashReturnTrace",
+    "DirectionCompareTrace",
+    "ENTRY_SPECS",
+    "EntryTrace",
+    "LiveDirectionTrace",
+    "LiveIndexTrace",
+    "NativeAimYaw",
+    "NativeEntryOwner",
+    "NativeIdleRoot",
+    "NativeIdleUpdate",
+    "NativeSlideCrouchAimYaw",
+    "NativeTrace",
+    "PROLOGUE",
+    "RECORD_SIZE",
+    "ROUTE_CAPACITY",
+    "ROUTE_RECORD_SIZE",
+    "SLIDE_RECORD_HASH",
+    "SLIDE_RECORD_PREFIX",
+    "SPRINT_DIRECTION_SPEC",
+    "SPRINT_TEMPLATE",
+    "SPRINT_TEMPLATE_HASH",
+    "SprintIndexTrace",
+    "TARGET_RVA",
+    "TRACE_HASH",
+    "TRACE_PREFIX",
+    "TRACE_SPECS",
+    "VectorEntryTrace"
+  ],
+  "note": "Native source slices remain unchanged. Input and flattened dispatch are the intended semantic changes."
+}
