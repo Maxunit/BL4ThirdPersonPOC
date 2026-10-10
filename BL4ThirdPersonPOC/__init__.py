@@ -12,7 +12,8 @@ Native lifetime and handoff contracts are described in docs/NATIVE_LIFECYCLE.md.
 from __future__ import annotations
 
 # Available before build_mod invokes the automatic enable callback.
-MOD_VERSION = "0.3.9.18"
+MOD_VERSION = "0.3.9.21"
+HYBRID_ADS_AVAILABLE = True  # optional Hybrid diagnostics QA
 
 import builtins
 import ctypes
@@ -632,13 +633,15 @@ omni_hybrid_ads = BoolOption(
     display_name="Hybrid ADS Mode (Omni)",
     description=(
         "Omni only: holding ADS aims over the shoulder (body faces the view, "
-        "camera moves closer); Sprint while aiming toggles the weapon scope. Default: off."
+        "regular camera offsets); Sprint while aiming toggles the weapon scope. "
+        "TPS zoom uses ADS ZOOM settings. Includes snipers; Sniper ADS applies "
+        "when Hybrid is off. Default: off."
     ),
 )
 
 
 def _set_omni_hybrid_ads(value: bool) -> bool:
-    omni_hybrid_ads.value = value is True
+    omni_hybrid_ads.value = value is True and HYBRID_ADS_AVAILABLE
     try:
         mod.save_settings()
     except Exception as exc:
@@ -1767,9 +1770,12 @@ from .camera_math import (
 
 
 def _native_write_code(address: int, data: bytes) -> None:
+    cache = globals().get('_omni_rebind_memory')
+    admission = None if cache is None else cache.write_admission(address, data)
     return _native_write_code_impl(
         address,
         data,
+        _admit=admission,
         _kernel32=_kernel32,
         _PAGE_EXECUTE_READWRITE=_PAGE_EXECUTE_READWRITE,
     )
@@ -2593,6 +2599,12 @@ from .native_memory import (
 
 
 def _native_query(address: int) -> _MEMORY_BASIC_INFORMATION:
+    cache = globals().get('_omni_rebind_memory')
+    if cache is not None:
+        return cache.query_region(address, _native_fresh_query)
+    return _native_fresh_query(address)
+
+def _native_fresh_query(address):
     return _memory_query(address, _kernel32, _MEMORY_BASIC_INFORMATION)
 
 
@@ -3283,7 +3295,7 @@ def _menu_open() -> None:
         get_omni_movement=lambda: omni_movement_experimental.value is True,
         set_omni_movement=_set_omni_movement,
         omni_movement_caption=_omni_movement_caption,
-        get_hybrid_ads=lambda: omni_hybrid_ads.value is True,
+        get_hybrid_ads=lambda: HYBRID_ADS_AVAILABLE and omni_hybrid_ads.value is True,
         set_hybrid_ads=_set_omni_hybrid_ads,
         debug_actions={
             "perf": lambda: perf_probe_toggle(None),
@@ -3362,7 +3374,7 @@ def dump_ui_publish_topology_console(_args: Any) -> None:
     "bl4tps_omni",
     description=(
         "Omnidirectional movement: on | off | status | report | diag on|off | "
-        "hybrid on|off|dolly <cm>|zoom <x>"
+        "hybrid on|off|status"
     ),
 )
 def omni_movement_console(args: Any) -> None:
@@ -3386,13 +3398,11 @@ def omni_movement_console(args: Any) -> None:
         elif action == "hybrid":
             if args.value in ("on", "off"):
                 _set_omni_hybrid_ads(args.value == "on")
-            elif args.value == "dolly":
-                hybrid_ads.set_dolly(float(args.extra))
             elif args.value == "zoom":
-                hybrid_ads.set_max_magnification(float(args.extra))
+                logging.info("[BL4ThirdPersonPOC] Hybrid zoom uses the ADS ZOOM menu; no separate zoom cap")
             elif args.value not in (None, "status"):
                 logging.info(
-                    "[BL4ThirdPersonPOC] usage: bl4tps_omni hybrid on|off|dolly <cm>|zoom <x>"
+                    "[BL4ThirdPersonPOC] usage: bl4tps_omni hybrid on|off|status"
                 )
             logging.info(f"[BL4ThirdPersonPOC] OMNI_HYBRID_ADS {hybrid_ads.status(owner)}")
             return

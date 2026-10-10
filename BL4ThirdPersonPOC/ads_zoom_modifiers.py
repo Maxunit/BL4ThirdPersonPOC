@@ -95,6 +95,7 @@ def _initialize(mod):
 def update(mod):
     """Run at equip completion before reticle publication, with a camera-update fallback."""
     handoff, ads = mod._ads_handoff, mod._ads_tps_state
+    settled = ads.get("hybrid_settled_equip") if isinstance(ads, dict) else None
     if not (
         isinstance(ads, dict)
         and ads.get("phase") == "ads"
@@ -102,7 +103,7 @@ def update(mod):
         and mod._ads_active
         and mod._ads_route == "tps"
         and handoff.get("incoming_weapon")
-        and int(handoff.get("equip_ordinal", 0)) >= 2
+        and (int(handoff.get("equip_ordinal", 0)) >= 2 or isinstance(settled, dict))
         and not handoff.get("latch_active")
         and not handoff.get("reticle_rebind_active")
         and ads.get("transition") is None
@@ -146,6 +147,21 @@ def update(mod):
     weapon = camera.CameraModeInputs.Weapon
     wa = mod._object_address(weapon)
     identity = tuple(mod._object_address(x) for x in (pc, pawn, camera, weapon))
+    if int(handoff.get("equip_ordinal", 0)) < 2:
+        # Lifecycle publishes this proof only after native Look acquisition.
+        # Preserve the native modifier guards below and never invent callbacks.
+        if not (
+            isinstance(settled, dict)
+            and settled.get("identity") == identity
+            and int(settled.get("collector_address", 0))
+            == int(handoff.get("collector_address", 0))
+            == int(mod._ads_collector_address)
+            != 0
+            and str(weapon.CurrentState) == "Active"
+            and not handoff.get("in_gap")
+            and mod._native_active()
+        ):
+            return
     key = identity + (int(handoff["equip_ordinal"]),)
     if ads.get("zoom_modifier_attempt") == key:
         return

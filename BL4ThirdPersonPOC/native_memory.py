@@ -480,7 +480,7 @@ def _interaction_prompt_build_stub(
 
 
 def _native_write_code(
-    address: int, data: bytes, *, _kernel32, _PAGE_EXECUTE_READWRITE
+    address: int, data: bytes, *, _kernel32, _PAGE_EXECUTE_READWRITE, _admit=None
 ) -> None:
     """Write code, flush the instruction cache, and restore page protection.
 
@@ -501,6 +501,8 @@ def _native_write_code(
             "Item-card VirtualProtect RWX failed",
         )
     try:
+        if _admit is not None:
+            _admit(old_protect.value)
         ctypes.memmove(address, data, len(data))
         if not _kernel32.FlushInstructionCache(
             _kernel32.GetCurrentProcess(),

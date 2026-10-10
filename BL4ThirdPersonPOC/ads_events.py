@@ -200,7 +200,6 @@ def _update_hybrid_ads_weapon_handoff_impl(
         target_fov, native_mag, effective_mag = adjust(
             owner_module, category, base_fov, (target_fov, native_mag, effective_mag)
         )
-        target_fov = hybrid_ads.cap_target_fov(owner_module, base_fov, target_fov)
         start_fov = owner_module._read_live_ads_fov(camera_manager)
         ads_state.update(
             zoom_multiplier=multiplier(owner_module, category),
@@ -367,6 +366,16 @@ def _update_hybrid_ads_route_reconciliation_impl(*, owner_module) -> None:
                     ),
                     "attempted": False,
                 }
+                if hybrid_ads.active(owner_module):
+                    # Scope-to-TPS migration waits for the camera blend. The
+                    # incoming equip callbacks may already have run by then.
+                    # Keep the rebind closed until lifecycle verifies the
+                    # settled weapon/collector and successfully owns its Look.
+                    # Do not fabricate callbacks or release zoom latches here.
+                    state["native_tps_rearm"].update(
+                        hybrid_settled_equip=True,
+                        collector_address=collector_address,
+                    )
                 owner_module._request_tps_reticle_publish("fps_to_tps_route")
                 logging.info(
                     "[BL4ThirdPersonPOC] ADS_RETICLE_REBIND_ARMED "
@@ -787,7 +796,6 @@ def _start_hybrid_tps_ads_impl(
     target_fov, native_mag, effective_mag = adjust(
         owner_module, category, base_fov, (target_fov, native_mag, effective_mag)
     )
-    target_fov = hybrid_ads.cap_target_fov(owner_module, base_fov, target_fov)
     mode_state = camera_manager.CameraModeState
     original_offset = (float(resume_state["original_offset"]) if resume_state is not None
                        else float(mode_state.BaseFOVOffset))
@@ -929,7 +937,6 @@ def _update_hybrid_tps_ads_impl(*, owner_module) -> None:
     if state.get('phase') == 'ads' and factor != state.get('zoom_multiplier', 1.0):
         derived = owner_module._derive_ads_target_fov(state['base_fov'], state['puppet_scale'])
         target, _native, _effective = adjust(owner_module, state.get('category'), state['base_fov'], derived)
-        target = hybrid_ads.cap_target_fov(owner_module, state['base_fov'], target)
         state['zoom_multiplier'] = factor
         state['target_fov'] = target
         owner_module._begin_hybrid_ads_transition(

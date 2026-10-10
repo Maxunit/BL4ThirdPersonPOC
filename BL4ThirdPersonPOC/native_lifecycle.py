@@ -108,6 +108,7 @@ def _held_ads_rearm_ready(camera: Any, pawn: Any, *, owner_module) -> bool:
         return False
     # Hybrid ADS scope exit: same weapon, so no equip callback pair follows.
     same_weapon = bool(request.get("same_weapon"))
+    settled_equip = request.get("hybrid_settled_equip") is True
     if not (
         handoff.get("held")
         and mod._ads_active
@@ -116,8 +117,8 @@ def _held_ads_rearm_ready(camera: Any, pawn: Any, *, owner_module) -> bool:
         and ads.get("phase") == "ads"
         and ads.get("transition") is None
         and not handoff.get("latch_active")
-        and not handoff.get("reticle_rebind_active")
-        and (same_weapon or int(handoff.get("equip_ordinal", 0)) >= 2)
+        and (settled_equip or not handoff.get("reticle_rebind_active"))
+        and (same_weapon or settled_equip or int(handoff.get("equip_ordinal", 0)) >= 2)
         and not mod._ads_press_intent.get("pending")
         and mod._third_person_enabled
         and mod._third_person_pushed
@@ -152,6 +153,22 @@ def _held_ads_rearm_ready(camera: Any, pawn: Any, *, owner_module) -> bool:
         # A later weapon or player identity never inherits this request.
         handoff.pop("native_tps_rearm", None)
         return False
+    if settled_equip:
+        from . import hybrid_ads
+
+        # Only the Hybrid FPS->TPS migration creates this alternate admission.
+        # All original runtime/native gates still apply; an in-flight equip,
+        # different collector or lost held ADS never closes the rebind.
+        if not (
+            hybrid_ads.active(mod)
+            and not handoff.get("in_gap")
+            and str(weapon.CurrentState) == "Active"
+            and int(request.get("collector_address", 0))
+            == int(handoff.get("collector_address", 0))
+            == int(mod._ads_collector_address)
+            != 0
+        ):
+            return False
     return bool(
         identity[3]
         and int(pawn.ZoomState.State) in (1, 2)
@@ -161,6 +178,48 @@ def _held_ads_rearm_ready(camera: Any, pawn: Any, *, owner_module) -> bool:
         and not mod._looks_like_first_person_fallback()
         and mod._ffyl_camera_stack_has_single_tps(camera)
     )
+
+
+def _rearm_held_ads_if_ready(camera: Any, pawn: Any, *, owner_module) -> None:
+    """Consume the identity-bound request only after native acquisition.
+
+    A failed or superseded activation preserves the rebind guard. The Hybrid
+    alternate completion observes settled state instead of replaying an equip
+    callback pair that may predate the camera-route migration.
+    """
+    mod = owner_module
+    if not _held_ads_rearm_ready(camera, pawn, owner_module=mod):
+        return
+    request = mod._ads_handoff["native_tps_rearm"]
+    try:
+        mod._native_start(allow_tps_ads=True)
+        if not mod._native_active():
+            raise RuntimeError("Native TPS ADS activation did not acquire a Look owner")
+        if mod._ads_handoff.get("native_tps_rearm") is not request:
+            return
+        mod._ads_handoff.pop("native_tps_rearm", None)
+        if request.get("hybrid_settled_equip"):
+            mod._ads_tps_state["hybrid_settled_equip"] = {
+                "identity": request["identity"],
+                "collector_address": request["collector_address"],
+            }
+            if mod._ads_handoff.get("reticle_rebind_active"):
+                mod._ads_handoff["reticle_rebind_active"] = False
+                mod._ads_handoff["reticle_rebind_completions"] += 1
+            from . import ads_zoom_modifiers
+
+            ads_zoom_modifiers.update(mod)
+            mod._request_tps_reticle_publish("hybrid_settled_weapon_handoff")
+            source = "hybrid_settled_weapon_handoff"
+        else:
+            source = "hybrid_scope_exit" if request.get("same_weapon") else "native_fps_weapon_handoff"
+        mod.logging.info("[BL4ThirdPersonPOC] HELD_ADS_REARMED source=" + source)
+    except Exception as exc:
+        request["attempted"] = True
+        mod.logging.error(
+            "[BL4ThirdPersonPOC] HELD_ADS_REARM_FAILED "
+            f"{type(exc).__name__}: {exc}"
+        )
 
 
 def _native_slide_ads_ready_impl(camera: Any, pawn: Any, *, owner_module) -> bool:
@@ -725,25 +784,7 @@ def _update_native_ownership_impl(*, owner_module) -> None:
         or owner_module._ads_press_intent.get("pending")
         or owner_module._ads_handoff.get("held")
     ):
-        if _held_ads_rearm_ready(camera, pawn, owner_module=owner_module):
-            request = owner_module._ads_handoff["native_tps_rearm"]
-            try:
-                owner_module._native_start(allow_tps_ads=True)
-                if not owner_module._native_active():
-                    raise RuntimeError(
-                        "Native TPS ADS activation did not acquire a Look owner"
-                    )
-                owner_module._ads_handoff.pop("native_tps_rearm", None)
-                owner_module.logging.info(
-                    "[BL4ThirdPersonPOC] HELD_ADS_REARMED source="
-                    + ("hybrid_scope_exit" if request.get("same_weapon") else "native_fps_weapon_handoff")
-                )
-            except Exception as exc:
-                request["attempted"] = True
-                owner_module.logging.error(
-                    "[BL4ThirdPersonPOC] HELD_ADS_REARM_FAILED "
-                    f"{type(exc).__name__}: {exc}"
-                )
+        _rearm_held_ads_if_ready(camera, pawn, owner_module=owner_module)
         owner_module._update_native_ads_origin(camera, pawn)
         if slide_ads_rearm:
             try:

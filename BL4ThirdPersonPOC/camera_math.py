@@ -1257,7 +1257,7 @@ def _set_camera_offset_impl(x: float, y: float, z: float, *, owner_module) -> bo
     x, y, z = respawn_camera.compensate_offset(owner_module, (x, y, z))
     from . import ffyl_strategy_runtime
     x, y, z = ffyl_strategy_runtime.compensate_entry_offset(owner_module, (x, y, z))
-    # Hybrid ADS (omni): hold dolly and scope fades act on the final offset.
+    # Hybrid ADS (omni): scope fades act on the final offset.
     from . import hybrid_ads
     x, y, z = hybrid_ads.compensate(owner_module, x, y, z)
     _pc, pawn, camera_manager = owner_module._get_runtime()

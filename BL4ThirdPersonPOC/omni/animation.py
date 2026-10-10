@@ -1,4 +1,5 @@
 """Animation responsibility; explicit pipeline calls, no historical probe inheritance."""
+from .rebind_cache import layout_query, bone_names
 from time import monotonic
 import math
 import struct
@@ -55,7 +56,7 @@ class AnimationMixin:
         count = int(mesh.GetNumBones())
         if not 1 <= count <= 512:
             raise RuntimeError('Skeleton bone count outside diagnostic bounds')
-        names = [str(mesh.GetBoneName(i)) for i in range(count)]
+        names = list(bone_names('visual', self, mesh, count))
         groups = (('root', lambda n: 'root' in n or n in ('origin', 'base')), ('pelvis', lambda n: 'pelvis' in n or 'hips' in n or n == 'hip'), ('spine', lambda n: 'spine' in n), ('neck', lambda n: 'neck' in n), ('head', lambda n: 'head' in n), ('thigh', lambda n: 'thigh' in n))
         chosen = []
         for label, predicate in groups:
@@ -359,30 +360,30 @@ class AnimationMixin:
         self.report['visual_binding_cost_us'] = round((monotonic() - started) * 1000000.0, 1)
 
     def _lean_bind_visual(self):
-        self._player_bind_visual()
-        anim = self.anim_ref()
-        expected = {self.BLEND_NODE: ('AnimNode_ApplyMeshSpaceAdditive', self.BLEND_OFFSET), 'GbxAnimGraphNode_BlendSpacePlayer_7': ('GbxAnimNode_BlendSpacePlayer', self.LEAN_OFFSET)}
-        found = {}
-        for owner in (anim.Class, *tuple(anim.Class._superfields())):
-            for prop in owner._properties():
-                name = str(prop.Name)
-                if name not in expected:
-                    continue
-                if str(prop.Class.Name) != 'StructProperty':
-                    raise RuntimeError('Lean binding property type changed')
-                actual = (str(prop.Struct.Name), int(prop.Offset_Internal))
-                if actual != expected[name]:
-                    raise RuntimeError('Lean blend layout changed: ' + name)
-                found[name] = actual
-                if name == self.BLEND_NODE:
-                    fields = {str(p.Name): int(p.Offset_Internal) for p in prop.Struct._properties()}
-                    if fields.get('Additive') != 40 or fields.get('bInvertAlpha') != 216:
-                        raise RuntimeError('Reviewed Lean blend field offsets changed')
-        if found != expected:
-            raise RuntimeError('Reviewed Lean blend bindings unavailable')
-        self.blend_layout_ready = True
-        self.blend_node()
-        self.report['lean_blend_binding'] = {'node': self.BLEND_NODE, 'offset': self.BLEND_OFFSET, 'lean_player_offset': self.LEAN_OFFSET, 'additive_link_pointer_matches': True}
+            self._player_bind_visual()
+            anim = self.anim_ref()
+            expected = {self.BLEND_NODE: ('AnimNode_ApplyMeshSpaceAdditive', self.BLEND_OFFSET), 'GbxAnimGraphNode_BlendSpacePlayer_7': ('GbxAnimNode_BlendSpacePlayer', self.LEAN_OFFSET)}
+            found = {}
+            for owner in layout_query('owners', self, anim):
+                for prop in layout_query('props', self, anim, owner, ('names', tuple(expected))):
+                    name = str(prop.Name)
+                    if name not in expected:
+                        continue
+                    if str(prop.Class.Name) != 'StructProperty':
+                        raise RuntimeError('Lean binding property type changed')
+                    actual = (str(prop.Struct.Name), int(prop.Offset_Internal))
+                    if actual != expected[name]:
+                        raise RuntimeError('Lean blend layout changed: ' + name)
+                    found[name] = actual
+                    if name == self.BLEND_NODE:
+                        fields = {str(p.Name): int(p.Offset_Internal) for p in prop.Struct._properties()}
+                        if fields.get('Additive') != 40 or fields.get('bInvertAlpha') != 216:
+                            raise RuntimeError('Reviewed Lean blend field offsets changed')
+            if found != expected:
+                raise RuntimeError('Reviewed Lean blend bindings unavailable')
+            self.blend_layout_ready = True
+            self.blend_node()
+            self.report['lean_blend_binding'] = {'node': self.BLEND_NODE, 'offset': self.BLEND_OFFSET, 'lean_player_offset': self.LEAN_OFFSET, 'additive_link_pointer_matches': True}
 
     def blend_node(self):
         anim = self.anim_ref()

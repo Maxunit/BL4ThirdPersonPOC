@@ -7,6 +7,8 @@ from unrealsdk import hooks, find_enum, find_object
 from .common import log as logging
 from unrealsdk.unreal import WeakPointer
 from .common import KEY, TAG, MAX_SAMPLES, FRAME_STRIDE, angle, parts, describe, report_path, write_report
+from .rebind_cache import bone_names
+from .vehicle_handoff import allow_exit_air
 from .inputs import NativeBindings
 from . import settings
 from .. import hybrid_ads
@@ -275,7 +277,7 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
         if bool(pc.bShowMouseCursor) or any((bool(getattr(self.mod, f, False)) for f in ('_ads_active', '_vehicle_camera_active', '_shop_camera_active', '_ladder_active', '_slide_active'))):
             raise RuntimeError('Exit menus, ADS, vehicles and special movement before arming')
         movement = pawn.OakCharacterMovement
-        if movement is None or int(movement.MovementMode) != 1:
+        if (movement is None or int(movement.MovementMode) != 1) and not allow_exit_air(self, pc, pawn, camera, movement):
             raise RuntimeError('Grounded walking movement required')
         if str(camera.GetActorCameraMode(pawn)) != 'ThirdPerson':
             raise RuntimeError('Normal ThirdPerson camera mode required')
@@ -390,7 +392,7 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
         count = int(mesh.GetNumBones())
         if not 1 <= count <= 512:
             raise RuntimeError('Head skeleton count outside bounds')
-        names = {str(mesh.GetBoneName(i)) for i in range(count)}
+        names = set(bone_names('head', self, mesh, count))
         if not all((n in names for n in self.BONE_NAMES)):
             raise RuntimeError('Reviewed head/spine bones missing')
         for name in self.AIM_NODES:
@@ -551,6 +553,14 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
             self.last_input_source = source
 
     def _ground_pose_frame(self, obj, args, ret, func):
+        cache = getattr(getattr(self, 'lifecycle_supervisor', None), 'rebind_cache', None)
+        if cache is not None and self.active and not all((self.ready, self.blend_layout_ready, self.player_ready, self.sprint_ready, self.route_ready, self.vector_ready, self.entry_ready)):
+            with cache.transaction(self):
+                self._ground_pose_work(obj, args, ret, func)
+        else:
+            self._ground_pose_work(obj, args, ret, func)
+
+    def _ground_pose_work(self, obj, args, ret, func):
         self._input_source_frame(obj, args, ret, func)
         if self.active and (not self.busy):
             self.observe_ground_input_pose('POST')

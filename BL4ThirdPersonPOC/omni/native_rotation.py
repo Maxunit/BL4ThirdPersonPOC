@@ -6,6 +6,7 @@ import math
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from .rebind_cache import layout_query
 from time import monotonic, perf_counter_ns
 import json
 import sys
@@ -217,73 +218,73 @@ class NativeAimYaw:
         self.hook=None
 
     def install(self):
-        c=self.capture
-        if not c.updates.is_game_thread():raise RuntimeError('Aim hook installation requires owned game thread')
-        read=c.native.read
-        base=int(self.mod._kernel32.GetModuleHandleW(None) or 0)
-        dos=read(base,64)
-        if dos[:2]!=b'MZ':raise RuntimeError('Aim DOS signature differs')
-        offset=struct.unpack_from('<I',dos,60)[0]
-        if not 64<=offset<=0x100000:raise RuntimeError('Aim PE offset outside bounds')
-        pe=read(base+offset,0x108)
-        build=(struct.unpack_from('<I',pe,8)[0],struct.unpack_from('<I',pe,80)[0],struct.unpack_from('<H',pe,4)[0])
-        if pe[:4]!=b'PE\0\0' or struct.unpack_from('<H',pe,24)[0]!=0x20b or build!=(0x6AA81051,0x31B8C000,0x8664):
-            raise RuntimeError('Unreviewed Aim hook game build')
-        anim=c.anim_ref()
-        # SDK property enumeration may include inherited properties again.
-        # Require one distinct reflected layout, rather than one enumeration occurrence.
-        candidate_map={}
-        for owner in (anim.Class,*tuple(anim.Class._superfields())):
-            for prop in owner._properties():
-                if str(prop.Name)!=c.NODE_NAME or str(prop.Class.Name)!='StructProperty':continue
-                key=(int(prop.Offset_Internal),str(prop.Struct.Name))
-                candidate_map.setdefault(key,prop)
-        candidates=list(candidate_map.values())
-        if len(candidates)!=1 or str(candidates[0].Struct.Name)!='GbxAnimNode_Rotation_AimOffset':
-            raise RuntimeError('Aim node reflection binding differs: distinct layouts='+repr(list(candidate_map)))
-        node_offset=int(candidates[0].Offset_Internal)
-        if not 0<=node_offset<=0x400000:raise RuntimeError('Aim node offset outside bounds')
-        self.node=c.anim_address+node_offset
-        self.table=struct.unpack('<Q',read(self.node,8))[0]
-        if self.table!=base+0xB0A4B90 or struct.unpack('<Q',read(self.table+61*8,8))[0]!=base+self.TARGET:
-            raise RuntimeError('Reviewed normal Aim input dispatch differs')
-        node=getattr(anim,c.NODE_NAME)
-        if int(node.YawAxis)!=1 or int(node.PitchAxis)!=2:raise RuntimeError('Reviewed Aim axes differ')
-        for rva,expected in {0x15D5EF:'ff90e8010000',0x15D59E:'f30f5a8640010000',0x15D5C5:'f30f5a8644010000'}.items():
-            if read(base+rva,len(bytes.fromhex(expected)))!=bytes.fromhex(expected):
-                raise RuntimeError('Reviewed Aim axis/callsite differs: '+hex(rva))
-        target=base+self.TARGET
-        if read(target,len(self.PROLOGUE))!=self.PROLOGUE:raise RuntimeError('Aim entry patched or differs')
-        info=self.mod._native_query(target);region=int(info.BaseAddress or 0)
-        if (int(info.State)!=0x1000 or int(info.Type)!=0x1000000 or int(info.Protect)&0x100
-                or int(info.Protect)&0xff not in (0x20,0x40,0x80)
-                or not region<=target<target+len(self.PROLOGUE)<=region+int(info.RegionSize)):
-            raise RuntimeError('Aim native code page differs')
-        if len(self.PROLOGUE)!=19 or len(self.PREFIX)!=self.PREFIX_SIZE or hashlib.sha256(self.PREFIX).hexdigest()!=self.HASH:
-            raise RuntimeError('Audited Aim instruction template differs')
-        self.control[1]=self.node;self.control[2]=base+0x15D5F5
-        stub=int(self.mod._kernel32.VirtualAlloc(None,0x2000,0x3000,0x40) or 0)
-        if not stub:raise RuntimeError('Aim stub allocation failed')
-        trampoline=stub+0x1800
-        self.hook={'target':target,'original':self.PROLOGUE,
-            'patch':self.mod._native_absolute_jump(stub)+b'\x90'*(len(self.PROLOGUE)-14),
-            'stub':stub,'trampoline':trampoline,'control':self.control,'buffer':self.control,
-            'restored':False,'patch_attempted':False,'label':'normal AimOffset stack yaw AB'}
-        code=self.prefix_code()+self.mod._native_absolute_jump(trampoline)
-        original=self.mod._native_build_trampoline(self.PROLOGUE,target+len(self.PROLOGUE))
-        ctypes.memmove(stub,code,len(code));ctypes.memmove(trampoline,original,len(original))
-        for address,data in ((stub,code),(trampoline,original)):
-            if not self.mod._kernel32.FlushInstructionCache(self.mod._kernel32.GetCurrentProcess(),ctypes.c_void_p(address),len(data)):
-                raise RuntimeError('Aim instruction-cache flush failed')
-        c.bound()
-        if read(self.node,8)!=struct.pack('<Q',self.table) or read(target,len(self.PROLOGUE))!=self.PROLOGUE:
-            raise RuntimeError('Aim binding changed before publication')
-        self.hook['patch_attempted']=True
-        self.mod._native_write_code(target,self.hook['patch'])
-        if read(target,len(self.PROLOGUE))!=self.hook['patch']:raise RuntimeError('Aim patch readback differs')
-        c.report['aim_native_binding']={'target_rva':hex(self.TARGET),'caller_return_rva':'0x15d5f5',
-            'node_name':c.NODE_NAME,'node_offset':node_offset,
-            'scope':'Exact normal node address and captured caller only. Zero first double in caller-owned temporary input vector; preserve pitch and all other arguments. Runs inline on the animation caller thread, without Python callbacks. Counters use atomic increments; published stubs and controls remain pinned after restoration.'}
+            c=self.capture
+            if not c.updates.is_game_thread():raise RuntimeError('Aim hook installation requires owned game thread')
+            read=c.native.read
+            base=int(self.mod._kernel32.GetModuleHandleW(None) or 0)
+            dos=read(base,64)
+            if dos[:2]!=b'MZ':raise RuntimeError('Aim DOS signature differs')
+            offset=struct.unpack_from('<I',dos,60)[0]
+            if not 64<=offset<=0x100000:raise RuntimeError('Aim PE offset outside bounds')
+            pe=read(base+offset,0x108)
+            build=(struct.unpack_from('<I',pe,8)[0],struct.unpack_from('<I',pe,80)[0],struct.unpack_from('<H',pe,4)[0])
+            if pe[:4]!=b'PE\0\0' or struct.unpack_from('<H',pe,24)[0]!=0x20b or build!=(0x6AA81051,0x31B8C000,0x8664):
+                raise RuntimeError('Unreviewed Aim hook game build')
+            anim=c.anim_ref()
+            # SDK property enumeration may include inherited properties again.
+            # Require one distinct reflected layout, rather than one enumeration occurrence.
+            candidate_map={}
+            for owner in (anim.Class,*tuple(anim.Class._superfields())):
+                for prop in layout_query('props', self.capture, anim, owner, ('names', (c.NODE_NAME,))):
+                    if str(prop.Name)!=c.NODE_NAME or str(prop.Class.Name)!='StructProperty':continue
+                    key=(int(prop.Offset_Internal),str(prop.Struct.Name))
+                    candidate_map.setdefault(key,prop)
+            candidates=list(candidate_map.values())
+            if len(candidates)!=1 or str(candidates[0].Struct.Name)!='GbxAnimNode_Rotation_AimOffset':
+                raise RuntimeError('Aim node reflection binding differs: distinct layouts='+repr(list(candidate_map)))
+            node_offset=int(candidates[0].Offset_Internal)
+            if not 0<=node_offset<=0x400000:raise RuntimeError('Aim node offset outside bounds')
+            self.node=c.anim_address+node_offset
+            self.table=struct.unpack('<Q',read(self.node,8))[0]
+            if self.table!=base+0xB0A4B90 or struct.unpack('<Q',read(self.table+61*8,8))[0]!=base+self.TARGET:
+                raise RuntimeError('Reviewed normal Aim input dispatch differs')
+            node=getattr(anim,c.NODE_NAME)
+            if int(node.YawAxis)!=1 or int(node.PitchAxis)!=2:raise RuntimeError('Reviewed Aim axes differ')
+            for rva,expected in {0x15D5EF:'ff90e8010000',0x15D59E:'f30f5a8640010000',0x15D5C5:'f30f5a8644010000'}.items():
+                if read(base+rva,len(bytes.fromhex(expected)))!=bytes.fromhex(expected):
+                    raise RuntimeError('Reviewed Aim axis/callsite differs: '+hex(rva))
+            target=base+self.TARGET
+            if read(target,len(self.PROLOGUE))!=self.PROLOGUE:raise RuntimeError('Aim entry patched or differs')
+            info=self.mod._native_query(target);region=int(info.BaseAddress or 0)
+            if (int(info.State)!=0x1000 or int(info.Type)!=0x1000000 or int(info.Protect)&0x100
+                    or int(info.Protect)&0xff not in (0x20,0x40,0x80)
+                    or not region<=target<target+len(self.PROLOGUE)<=region+int(info.RegionSize)):
+                raise RuntimeError('Aim native code page differs')
+            if len(self.PROLOGUE)!=19 or len(self.PREFIX)!=self.PREFIX_SIZE or hashlib.sha256(self.PREFIX).hexdigest()!=self.HASH:
+                raise RuntimeError('Audited Aim instruction template differs')
+            self.control[1]=self.node;self.control[2]=base+0x15D5F5
+            stub=int(self.mod._kernel32.VirtualAlloc(None,0x2000,0x3000,0x40) or 0)
+            if not stub:raise RuntimeError('Aim stub allocation failed')
+            trampoline=stub+0x1800
+            self.hook={'target':target,'original':self.PROLOGUE,
+                'patch':self.mod._native_absolute_jump(stub)+b'\x90'*(len(self.PROLOGUE)-14),
+                'stub':stub,'trampoline':trampoline,'control':self.control,'buffer':self.control,
+                'restored':False,'patch_attempted':False,'label':'normal AimOffset stack yaw AB'}
+            code=self.prefix_code()+self.mod._native_absolute_jump(trampoline)
+            original=self.mod._native_build_trampoline(self.PROLOGUE,target+len(self.PROLOGUE))
+            ctypes.memmove(stub,code,len(code));ctypes.memmove(trampoline,original,len(original))
+            for address,data in ((stub,code),(trampoline,original)):
+                if not self.mod._kernel32.FlushInstructionCache(self.mod._kernel32.GetCurrentProcess(),ctypes.c_void_p(address),len(data)):
+                    raise RuntimeError('Aim instruction-cache flush failed')
+            c.bound()
+            if read(self.node,8)!=struct.pack('<Q',self.table) or read(target,len(self.PROLOGUE))!=self.PROLOGUE:
+                raise RuntimeError('Aim binding changed before publication')
+            self.hook['patch_attempted']=True
+            self.mod._native_write_code(target,self.hook['patch'])
+            if read(target,len(self.PROLOGUE))!=self.hook['patch']:raise RuntimeError('Aim patch readback differs')
+            c.report['aim_native_binding']={'target_rva':hex(self.TARGET),'caller_return_rva':'0x15d5f5',
+                'node_name':c.NODE_NAME,'node_offset':node_offset,
+                'scope':'Exact normal node address and captured caller only. Zero first double in caller-owned temporary input vector; preserve pitch and all other arguments. Runs inline on the animation caller thread, without Python callbacks. Counters use atomic increments; published stubs and controls remain pinned after restoration.'}
 
     def validate(self):
         c=self.capture
@@ -535,37 +536,37 @@ class NativeSlideCrouchAimYaw(NativeAimYaw):
                 original.replace(b'\x11'*8,struct.pack('<Q',ctypes.addressof(self.crouch_control))))
 
     def install(self):
-        c=self.capture
-        if not c.updates.is_game_thread():raise RuntimeError('Crouch Aim binding requires owned game thread')
-        anim=c.anim_ref();read=c.native.read
-        if anim is None or int(anim._get_address())!=c.anim_address:raise RuntimeError('Crouch Aim animation identity differs')
-        layouts={}
-        for owner in (anim.Class,*tuple(anim.Class._superfields())):
-            for prop in owner._properties():
-                if str(prop.Name)==self.CROUCH_NAME and str(prop.Class.Name)=='StructProperty':
-                    layouts[(int(prop.Offset_Internal),str(prop.Struct.Name))]=prop
-        if len(layouts)!=1:raise RuntimeError('Crouch Aim reflected layouts differ')
-        offset,kind=next(iter(layouts))
-        if kind!='GbxAnimNode_Rotation_AimOffset' or not 0<=offset<=0x400000:
-            raise RuntimeError('Crouch Aim reflected struct differs')
-        node=getattr(anim,self.CROUCH_NAME)
-        if (str(node.RotationChannelName.TagName)!='RotationChannel.Aim' or
-            str(node.BlendSpaceKey.TagName)!='AnimSet.Player.3rd.AimO_3rd_Crouch' or
-            int(node.YawAxis)!=1 or int(node.PitchAxis)!=2):
-            raise RuntimeError('Crouch Aim channel/key/axes differ')
-        base=int(self.mod._kernel32.GetModuleHandleW(None) or 0)
-        address=c.anim_address+offset
-        table=struct.unpack('<Q',read(address,8))[0]
-        if table!=base+0xB0A4B90 or struct.unpack('<Q',read(table+61*8,8))[0]!=base+self.TARGET:
-            raise RuntimeError('Crouch Aim native dispatch differs')
-        self.crouch_node=address;self.crouch_table=table
-        self.crouch_control[1]=address;self.crouch_control[2]=base+0x15D5F5
-        # Parent performs the existing exact Steam fingerprint/code/caller checks.
-        super().install()
-        self.validate()
-        c.report['crouch_aim_native_binding']=dict(node_name=self.CROUCH_NAME,node_offset=offset,
-            target_rva=hex(self.TARGET),caller_return_rva='0x15d5f5',additional_native_patches=0,
-            scope='Second exact-node/caller copy of the tested Aim prefix, enabled only in B free Slide. Zero yaw in caller temporary, preserve pitch. Worker counters atomic, no strict pose-order inference.')
+            c=self.capture
+            if not c.updates.is_game_thread():raise RuntimeError('Crouch Aim binding requires owned game thread')
+            anim=c.anim_ref();read=c.native.read
+            if anim is None or int(anim._get_address())!=c.anim_address:raise RuntimeError('Crouch Aim animation identity differs')
+            layouts={}
+            for owner in (anim.Class,*tuple(anim.Class._superfields())):
+                for prop in layout_query('props', self.capture, anim, owner, ('names', (self.CROUCH_NAME,))):
+                    if str(prop.Name)==self.CROUCH_NAME and str(prop.Class.Name)=='StructProperty':
+                        layouts[(int(prop.Offset_Internal),str(prop.Struct.Name))]=prop
+            if len(layouts)!=1:raise RuntimeError('Crouch Aim reflected layouts differ')
+            offset,kind=next(iter(layouts))
+            if kind!='GbxAnimNode_Rotation_AimOffset' or not 0<=offset<=0x400000:
+                raise RuntimeError('Crouch Aim reflected struct differs')
+            node=getattr(anim,self.CROUCH_NAME)
+            if (str(node.RotationChannelName.TagName)!='RotationChannel.Aim' or
+                str(node.BlendSpaceKey.TagName)!='AnimSet.Player.3rd.AimO_3rd_Crouch' or
+                int(node.YawAxis)!=1 or int(node.PitchAxis)!=2):
+                raise RuntimeError('Crouch Aim channel/key/axes differ')
+            base=int(self.mod._kernel32.GetModuleHandleW(None) or 0)
+            address=c.anim_address+offset
+            table=struct.unpack('<Q',read(address,8))[0]
+            if table!=base+0xB0A4B90 or struct.unpack('<Q',read(table+61*8,8))[0]!=base+self.TARGET:
+                raise RuntimeError('Crouch Aim native dispatch differs')
+            self.crouch_node=address;self.crouch_table=table
+            self.crouch_control[1]=address;self.crouch_control[2]=base+0x15D5F5
+            # Parent performs the existing exact Steam fingerprint/code/caller checks.
+            super().install()
+            self.validate()
+            c.report['crouch_aim_native_binding']=dict(node_name=self.CROUCH_NAME,node_offset=offset,
+                target_rva=hex(self.TARGET),caller_return_rva='0x15d5f5',additional_native_patches=0,
+                scope='Second exact-node/caller copy of the tested Aim prefix, enabled only in B free Slide. Zero yaw in caller temporary, preserve pitch. Worker counters atomic, no strict pose-order inference.')
 
     def validate(self):
         super().validate()

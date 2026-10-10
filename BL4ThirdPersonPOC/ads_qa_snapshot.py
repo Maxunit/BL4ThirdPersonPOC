@@ -85,6 +85,8 @@ def capture(mod):
                     "target_fov",
                     "last_fov",
                     "transition",
+                    "zoom_multiplier",
+                    "hybrid_settled_equip",
                 )
             }
         )

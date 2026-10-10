@@ -1,12 +1,12 @@
 [project]
 name = "BL4ThirdPersonPOC"
-version = "0.3.9.18"
+version = "0.3.9.21"
 description = "Third-person camera mod for Borderlands 4 with hybrid ADS, beta FFYL/Ground Slam and experimental omnidirectional movement."
 authors = [{ name = "Maxunit & Kira" }]
 
 [tool.sdkmod]
 name = "BL4 Third Person PoC"
-version = "0.3.9.18"
+version = "0.3.9.21"
 supported_games = ["BL4"]
 coop_support = "ClientSide"
 

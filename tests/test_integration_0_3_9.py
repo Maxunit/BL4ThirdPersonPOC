@@ -118,7 +118,7 @@ class OmniIntegrationTests(unittest.TestCase):
         owner = self.owner()
         state = LifecycleSupervisor(owner, updates)
         state.install()
-        self.assertEqual(len(registered), 2)
+        self.assertEqual(len(registered), 4)
         self.assertFalse(hasattr(owner, '_on_disable_impl'))
         state.finish('USER_STOP')
         self.assertFalse(registered)
@@ -469,6 +469,8 @@ class LoaderSmokeTests(unittest.TestCase):
     def test_loads_from_built_sdkmod_and_writes_reports_outside_it(self):
         result = self.run_scenario('from_sdkmod')
         self.assertIn('BL4ThirdPersonPOC.sdkmod', result['loader_file'])
+        self.assertTrue(result['hybrid_on'])
+        self.assertFalse(result['hybrid_off'])
         self.assertTrue(result['report_written'])
         self.assertEqual(result['hooks_after_disable'], 0)
 

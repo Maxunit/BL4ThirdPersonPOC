@@ -1,4 +1,5 @@
 """Ground responsibility; explicit pipeline calls, no historical probe inheritance."""
+from .rebind_cache import layout_query
 from time import monotonic
 import ctypes
 import hashlib
@@ -14,24 +15,24 @@ from .native_movement import CircleEntry_CAPACITY, TRACE_SPECS
 class GroundMixin:
 
     def bind_visual(self):
-        self._lean_bind_visual()
-        anim = self.anim_ref()
-        props = reflected_fields(anim.Class)
-        p = props.get('GbxAnimGraphNode_Locomotion_2')
-        if p is None or str(p.Class.Name) != 'StructProperty' or str(p.Struct.Name) != 'GbxAnimNode_Locomotion' or (int(p.Offset_Internal) != 38928):
-            raise RuntimeError('Reviewed sprint Locomotion node differs')
-        base = int(self.mod._kernel32.GetModuleHandleW(None) or 0)
-        if hashlib.sha256(self.native.read(base + 25601096, 742)).hexdigest() != 'f863c0088795d163ae37c2bb00fecbb83ca557510584d32d0fc948ad6e1e4033':
-            raise RuntimeError('Reviewed Locomotion update code differs')
-        node = int(anim._get_address()) + 38928
-        if self.native.u64(node) != base + 185185344 or self.native.u64(base + 185185344 + 32) != base + 25601096:
-            raise RuntimeError('Reviewed sprint-node update binding differs')
-        self.selection_addresses = {'GbxAnimGraphNode_Locomotion_2': node}
-        players = anim.GbxAnimGraphNode_Locomotion_2.BlendSpacePlayers
-        if len(players) != 2:
-            raise RuntimeError('Reviewed two-player sprint layout differs')
-        if str(players[0].AnimAssetKey.TagName) != 'AnimSet.Player.3rd.BS_Sprint' or str(players[1].AnimAssetKey.TagName) != 'AnimSet.Player.3rd.Run_B':
-            raise RuntimeError('Reviewed sprint player keys differ')
+            self._lean_bind_visual()
+            anim = self.anim_ref()
+            props = layout_query('fields', self, anim)
+            p = props.get('GbxAnimGraphNode_Locomotion_2')
+            if p is None or str(p.Class.Name) != 'StructProperty' or str(p.Struct.Name) != 'GbxAnimNode_Locomotion' or (int(p.Offset_Internal) != 38928):
+                raise RuntimeError('Reviewed sprint Locomotion node differs')
+            base = int(self.mod._kernel32.GetModuleHandleW(None) or 0)
+            if hashlib.sha256(self.native.read(base + 25601096, 742)).hexdigest() != 'f863c0088795d163ae37c2bb00fecbb83ca557510584d32d0fc948ad6e1e4033':
+                raise RuntimeError('Reviewed Locomotion update code differs')
+            node = int(anim._get_address()) + 38928
+            if self.native.u64(node) != base + 185185344 or self.native.u64(base + 185185344 + 32) != base + 25601096:
+                raise RuntimeError('Reviewed sprint-node update binding differs')
+            self.selection_addresses = {'GbxAnimGraphNode_Locomotion_2': node}
+            players = anim.GbxAnimGraphNode_Locomotion_2.BlendSpacePlayers
+            if len(players) != 2:
+                raise RuntimeError('Reviewed two-player sprint layout differs')
+            if str(players[0].AnimAssetKey.TagName) != 'AnimSet.Player.3rd.BS_Sprint' or str(players[1].AnimAssetKey.TagName) != 'AnimSet.Player.3rd.Run_B':
+                raise RuntimeError('Reviewed sprint player keys differ')
 
     def restore_sprint_intent(self):
         if not self.sprint_pending:

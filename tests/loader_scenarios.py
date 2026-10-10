@@ -88,10 +88,14 @@ def from_sdkmod():
     h.enable_entry_points(loader)
     loader._on_enable()
     h.bind_game_thread(loader)
+    loader.omni_movement_console.run('hybrid on')
+    hybrid_on = loader.omni_hybrid_ads.value
+    loader.omni_movement_console.run('hybrid off')
+    hybrid_off = loader.omni_hybrid_ads.value
     loader.omni_movement_console.run('report')
     reports = [m for _, m in h.LOG if 'OMNI_REPORT json=' in m]
     loader._on_disable()
-    return dict(loader_file=loader.__file__, report_logged=bool(reports),
+    return dict(loader_file=loader.__file__, hybrid_on=hybrid_on, hybrid_off=hybrid_off, report_logged=bool(reports),
                 report_written=bool(reports) and str(h.SETTINGS) in reports[-1],
                 hooks_after_disable=len(h.HOOKS))
 
@@ -316,10 +320,10 @@ def hybrid_ads_wiring():
     hybrid_ads._state['scoped'] = True
     loader._on_disable()
     return dict(default=default, enabled=enabled, disabled=loader.omni_hybrid_ads.value,
-                dolly=status['dolly'], zoom=status['max_magnification'], active=status['active'],
+                has_dolly=('dolly' in status or hasattr(hybrid_ads, 'set_dolly')), zoom=status['zoom_source'], active=status['active'],
                 scoped_after_disable=hybrid_ads._state['scoped'],
                 registered='omni_hybrid_ads' in [o.identifier for o in loader.mod.options] if hasattr(loader, 'mod') else None,
-                console=[m for _, m in h.LOG[start:] if 'HYBRID' in m or 'OMNI_COMMAND_FAILED' in m])
+                console=[m for _, m in h.LOG[start:] if 'HYBRID' in m or 'OMNI_COMMAND_FAILED' in m or 'usage: bl4tps_omni hybrid' in m])
 
 
 SCENARIOS = {

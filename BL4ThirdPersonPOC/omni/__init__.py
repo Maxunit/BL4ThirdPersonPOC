@@ -114,7 +114,8 @@ def status(owner):
                 sessions=state.sequence, rebinds=state.report.get('rebind_count', 0),
                 errors=len(state.report.get('errors', [])),
                 gameplay_bound=child is not None,
-                native_patches=0 if child is None else child.report.get('native_patches', 0),
+                native_patches=(0 if child is None else child.report.get('native_patches', 0))
+                    + (0 if getattr(state, 'vehicle', None) is None else state.vehicle.patch_count()),
                 last_failure=_last_failure['reason'])
 
 

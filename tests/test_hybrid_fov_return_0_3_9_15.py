@@ -55,7 +55,7 @@ class ZoomReturnTests(unittest.TestCase):
             reason, owner_module=mod)
         self.ads_errors = []
         mod._ads_debug_error = lambda phase, exc: self.ads_errors.append((phase, str(exc)))
-        self.target = hybrid_ads.cap_target_fov(mod, 90., camera_math._derive_ads_target_fov(90., .5)[0])
+        self.target = camera_math._derive_ads_target_fov(90., .5)[0]
         mod._ads_tps_state.update(target_fov=self.target, last_fov=self.target,
                                   manager_address=mod._ads_object_address(self.camera))
         self.camera.CameraModeState.BaseFOVOffset = self.target - 90.
@@ -115,15 +115,15 @@ class ZoomReturnTests(unittest.TestCase):
         self.assertEqual(self.transitions[0][0], 'zoom_in')
         self.assertEqual(self.mod._ads_tps_state['last_fov'], 90.)
 
-    def test_return_dolly_finishes_at_ads_position_and_does_not_restart(self):
+    def test_return_uses_regular_offset_and_does_not_restart(self):
         self.return_from_scope()
         fade = hybrid_ads._state['fade']
         with patch.object(hybrid_ads, 'monotonic', return_value=fade['started'] + 1.):
             # Native mode is TPS, but route migration is not completed yet.
-            self.assertEqual(hybrid_ads.compensate(self.mod, 0., 0., 0.), (35., 75., 10.))
+            self.assertEqual(hybrid_ads.compensate(self.mod, 0., 0., 0.), (0., 75., 10.))
             self.settle()
             self.reconcile()
-            self.assertEqual(hybrid_ads.compensate(self.mod, 0., 75., 10.), (35., 75., 10.))
+            self.assertEqual(hybrid_ads.compensate(self.mod, 0., 75., 10.), (0., 75., 10.))
 
     def test_ads_release_during_return_restores_owned_offset(self):
         self.return_from_scope()

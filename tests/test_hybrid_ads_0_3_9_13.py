@@ -82,8 +82,6 @@ def fake_mod(route='tps', scoped_weapon=0xAA):
 class HybridBase(unittest.TestCase):
     def setUp(self):
         hybrid_ads.reset()
-        hybrid_ads._state.update(dolly=hybrid_ads.DEFAULT_DOLLY,
-                                 max_magnification=hybrid_ads.DEFAULT_MAX_MAGNIFICATION)
         self.running = patch('BL4ThirdPersonPOC.omni.is_running', return_value=True)
         self.running.start()
         self.bound = patch.object(hybrid_ads, 'gameplay_bound', return_value=True)
@@ -116,46 +114,31 @@ class GateTests(HybridBase):
         mod.omni_hybrid_ads.value = False
         self.assertTrue(hybrid_ads.sniper_uses_tps(mod))
 
-    def test_hold_zoom_is_capped_only_in_hybrid(self):
-        mod, _, _ = fake_mod()
-        self.assertAlmostEqual(hybrid_ads.cap_target_fov(mod, 90.0, 30.0), 90.0 / 1.35)
-        self.assertEqual(hybrid_ads.cap_target_fov(mod, 90.0, 80.0), 80.0)
-        mod.omni_hybrid_ads.value = False
-        self.assertEqual(hybrid_ads.cap_target_fov(mod, 90.0, 30.0), 30.0)
 
 
-class DollyTests(HybridBase):
-    def test_dolly_follows_the_ads_fov(self):
+class CameraPositionTests(HybridBase):
+    def test_zoom_progress_does_not_change_user_camera_offsets(self):
         mod, _, _ = fake_mod()
-        for fov, blend in ((90.0, 0.0), (80.0, 0.5), (70.0, 1.0)):
+        for fov in (90., 80., 70.):
             mod._ads_tps_state['last_fov'] = fov
-            self.assertAlmostEqual(hybrid_ads.dolly_blend(mod), blend)
-            self.assertAlmostEqual(hybrid_ads.compensate(mod, 0.0, 75.0, 10.0)[0], 35.0 * blend)
+            for offset in ((0., 75., 10.), (-80., 55., 20.), (120., 75., 10.), (0., 0., 0.)):
+                self.assertEqual(hybrid_ads.compensate(mod, *offset), offset)
 
-    def test_dolly_without_fov_change_follows_the_transition(self):
+    def test_zoom_release_and_hybrid_off_keep_regular_offsets(self):
         mod, _, _ = fake_mod()
-        state = mod._ads_tps_state
-        state.update(target_fov=90.0, last_fov=90.0)
-        self.assertEqual(hybrid_ads.dolly_blend(mod), 1.0)
-        state['transition'] = dict(kind='zoom_out', started=time.perf_counter(), duration=10.0)
-        self.assertGreater(hybrid_ads.dolly_blend(mod), 0.99)
-        state['phase'] = 'released'
-        state['transition'] = None
-        self.assertEqual(hybrid_ads.dolly_blend(mod), 0.0)
-
-    def test_no_dolly_outside_hybrid_tps_ads_or_for_zero_offsets(self):
-        mod, _, _ = fake_mod()
-        self.assertEqual(hybrid_ads.compensate(mod, 0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
-        mod._ads_route = 'hip'
-        self.assertEqual(hybrid_ads.compensate(mod, 0.0, 75.0, 10.0), (0.0, 75.0, 10.0))
-        mod._ads_route = 'tps'
+        for phase in ('ads', 'released'):
+            mod._ads_tps_state.update(phase=phase, transition=None)
+            self.assertEqual(hybrid_ads.compensate(mod, 20., 75., 10.), (20., 75., 10.))
         mod.omni_hybrid_ads.value = False
-        self.assertEqual(hybrid_ads.compensate(mod, 0.0, 75.0, 10.0), (0.0, 75.0, 10.0))
+        self.assertEqual(hybrid_ads.compensate(mod, 20., 75., 10.), (20., 75., 10.))
 
-    def test_dolly_never_pushes_past_the_limit(self):
+    def test_obsolete_dolly_state_cannot_affect_camera_and_is_removed_on_reset(self):
         mod, _, _ = fake_mod()
-        self.assertEqual(hybrid_ads.compensate(mod, 100.0, 75.0, 10.0)[0], hybrid_ads.MAX_OFFSET_X)
-        self.assertEqual(hybrid_ads.compensate(mod, 120.0, 75.0, 10.0)[0], 120.0)
+        hybrid_ads._state['dolly'] = 100.
+        self.assertEqual(hybrid_ads.compensate(mod, 20., 75., 10.), (20., 75., 10.))
+        hybrid_ads.reset()
+        self.assertNotIn('dolly', hybrid_ads.status(mod))
+        self.assertNotIn('dolly', hybrid_ads._state)
 
 
 class ScopeTests(HybridBase):
@@ -277,13 +260,13 @@ class FadeTests(HybridBase):
         self.clock.now += hybrid_ads.SCOPE_BLEND_SECONDS / 2
         self.assertAlmostEqual(hybrid_ads.compensate(mod, 0.0, 0.0, 0.0)[1], 37.5)
         self.clock.now += hybrid_ads.SCOPE_BLEND_SECONDS
-        # Blend over but still on the FPS route: retain the held-ADS dolly.
-        self.assertEqual(hybrid_ads.compensate(mod, 0.0, 0.0, 0.0), (35.0, 75.0, 10.0))
+        # Blend over but still on the FPS route: retain the regular TPS offset.
+        self.assertEqual(hybrid_ads.compensate(mod, 0.0, 0.0, 0.0), (0.0, 75.0, 10.0))
         self.assertIsNotNone(hybrid_ads._state['fade'])
         mod._ads_route = 'tps'
         mod._ads_tps_state = dict(phase='ads', base_fov=90.0, target_fov=70.0, last_fov=70.0,
                                   transition=None)
-        self.assertEqual(hybrid_ads.compensate(mod, 0.0, 75.0, 10.0), (35.0, 75.0, 10.0))
+        self.assertEqual(hybrid_ads.compensate(mod, 0.0, 75.0, 10.0), (0.0, 75.0, 10.0))
         self.assertIsNone(hybrid_ads._state['fade'])
 
     def test_release_during_scope_entry_starts_from_the_live_offset(self):
@@ -492,11 +475,12 @@ class LoaderWiringTests(unittest.TestCase):
         self.assertTrue(data['ok'], data.get('error'))
         result = data['result']
         self.assertEqual((result['default'], result['enabled'], result['disabled']), (False, True, False))
-        self.assertEqual((result['dolly'], result['zoom']), (50.0, 1.2))
+        self.assertFalse(result['has_dolly'])
+        self.assertEqual(result['zoom'], 'ads_zoom_settings')
         self.assertFalse(result['active'], 'omni is off in this scenario')
         self.assertFalse(result['scoped_after_disable'])
         self.assertTrue(result['registered'])
-        self.assertTrue(any('dolly must be 0..100 cm' in m for m in result['console']))
+        self.assertTrue(any('usage: bl4tps_omni hybrid on|off|status' in m for m in result['console']))
 
 
 if __name__ == '__main__':

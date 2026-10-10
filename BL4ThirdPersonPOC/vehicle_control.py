@@ -1,4 +1,5 @@
 """Optional camera-relative vehicle driving; validated runtime binding and native scalar-store boundary."""
+from .omni.vehicle_handoff import allow_early_drive
 from time import monotonic, perf_counter_ns
 import math
 import ctypes
@@ -196,7 +197,7 @@ class DriveCapture(Observer):
         if self.active and self.buffer is not None:
             try:
                 pc, pawn, manager, movement = self.current_bound()
-                if manager.CameraModeState.bIsTransitioning:
+                if (manager.CameraModeState.bIsTransitioning) and not allow_early_drive(self, pc, pawn, manager):
                     raise RuntimeError('Vehicle camera transition started')
                 keys = {name: bool(pc.IsInputKeyDown(key)) for name, key in self.key_values.items()}
                 analog = {name: number(pc.GetInputAnalogKeyState(key)) for name, key in self.analog_keys.items()}
@@ -230,7 +231,7 @@ class DriveCapture(Observer):
         pc, pawn, manager = self.mod._get_runtime()
         if any((o is None for o in (pc, pawn, manager))) or str(pawn.Class.Name) != 'OakVehicle':
             raise RuntimeError('Run seated in a standing vehicle')
-        if manager.CameraModeState.bIsTransitioning:
+        if (manager.CameraModeState.bIsTransitioning) and not allow_early_drive(self, pc, pawn, manager):
             raise RuntimeError('Wait for vehicle entry to finish')
         movement = pawn.OakVehicleMovement
         if movement is None or (require_stopped and abs(number(movement.GetForwardSpeed())) > 30):
@@ -380,15 +381,15 @@ class Capture(DriveCapture):
             return (None, 'WAITING_UI')
         if str(pawn.Class.Name) != 'OakVehicle':
             return (None, 'ON_FOOT')
-        if bool(manager.CameraModeState.bIsTransitioning):
+        if (bool(manager.CameraModeState.bIsTransitioning)) and not allow_early_drive(self, pc, pawn, manager):
             return (None, 'WAITING_TRANSITION')
         movement = pawn.OakVehicleMovement
         if movement is None:
             return (None, 'WAITING_MOVEMENT')
-        if not bool(self.mod._vehicle_camera_active):
+        if (not bool(self.mod._vehicle_camera_active)) and not allow_early_drive(self, pc, pawn, manager):
             return (None, 'WAITING_VEHICLE_CAMERA')
         target = manager.CameraModeInputs.ViewTarget
-        if target is None or int(target._get_address()) != int(pawn._get_address()):
+        if (target is None or int(target._get_address()) != int(pawn._get_address())) and not allow_early_drive(self, pc, pawn, manager):
             return (None, 'WAITING_VIEW_TARGET')
         objects = objects + (movement,)
         refs = tuple((WeakPointer(o) for o in objects))
@@ -558,10 +559,15 @@ class RuntimeOwner:
             pc, pawn, manager = self.mod._get_runtime()
             if (pc is None or pawn is None or manager is None or pc.bShowMouseCursor
                     or str(pawn.Class.Name) != 'OakVehicle'
-                    or not self.mod._vehicle_camera_active or manager.CameraModeState.bIsTransitioning):
+                    or ((not self.mod._vehicle_camera_active or manager.CameraModeState.bIsTransitioning)
+                        and not self.early_start(pc, pawn, manager))):
                 return
             self.child = Capture(self.mod)
-            self.child.install()
+            self._starting = True
+            try:
+                self.child.install()
+            finally:
+                self._starting = False
         except Exception as exc:
             self.active = False
             if self.child is not None:
@@ -571,6 +577,16 @@ class RuntimeOwner:
                 except Exception as cleanup_error:
                     self.mod.logging.error(TAG+' CLEANUP_FAILED '+repr(cleanup_error))
             self.mod.logging.error(TAG+' START_FAILED original control retained '+repr(exc))
+
+    def early_start(self, pc, pawn, manager):
+        sup = getattr(self.mod, '_player_omnidirectional_gameplay', None)
+        worker = getattr(sup, 'vehicle', None)
+        summon = getattr(worker, 'summon', None)
+        return (worker is not None and worker.active and summon is not None and summon.active
+                and summon.control[16] == 1 and summon.control[13] > 0
+                and pc == summon.pc_ref() and pc.PersonalVehicleState.Vehicle == pawn
+                and int(pawn._get_address()) == summon.control[17]
+                and runtime_updates.is_game_thread())
 
     def stop(self):
         self.active = False

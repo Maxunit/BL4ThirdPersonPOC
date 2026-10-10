@@ -8,9 +8,11 @@ from .common import KEY, TAG, describe, report_path, write_report
 from . import settings
 from .inputs import NativeBindings
 from .session import GameplaySession
+from .rebind_cache import RebindCache
+from .vehicle_handoff import VehicleHandoff, allow_exit_air
 
 class LifecycleSupervisor:
-    """Own two SDK lifecycle subscriptions; retire complete native sessions before restart."""
+    """Own restart/widget lifecycle subscriptions; retire complete native sessions before restart."""
 
     def __init__(self, mod, updates):
         self.mod = mod
@@ -31,9 +33,11 @@ class LifecycleSupervisor:
         self.path = report_path(mod, 'player_omnidirectional_gameplay')
         self.diagnostics = settings.diagnostics_enabled()
         self.previous_normal_inputs = None
-        self.report = dict(probe='player_omnidirectional_gameplay', integrated=True, diagnostics=self.diagnostics, utc=datetime.now(timezone.utc).isoformat(), events=[], errors=[], retired_sessions=[], native_patches=0, sdk_hooks=0, sdk_hooks_peak=3, rebind_count=0, note='Existing owned Widget PRE lifecycle plus local ClientRestart PRE. Complete native session retirement before pawn restart; no custom vehicle movement. Current gameplay session report retained; last 16 retired-session summaries. Normal same-owner special states and UI pause; rearm only stable grounded normal TPS with released configured Sprint/Dash/Crouch/Jump actions, no ADS/slide/sprint/Dash. No elapsed-time scheduler.', scope_limits='Refactored V3 lifecycle; regression after cleanup remains required. Death, FFYL, Second Wind and respawn are not validated. Any ClientRestart retires safely, but rearming still requires the full on-foot guards. Unknown unannounced identity changes, build/ownership/cleanup errors fail closed.')
+        self.report = dict(probe='player_omnidirectional_gameplay', integrated=True, diagnostics=self.diagnostics, utc=datetime.now(timezone.utc).isoformat(), events=[], errors=[], retired_sessions=[], native_patches=0, sdk_hooks=0, sdk_hooks_peak=4, rebind_count=0, note='Existing owned Widget PRE lifecycle plus local ClientRestart PRE. Complete native session retirement before pawn restart; owned vehicle-facing and paired exit-air handoff. Current gameplay session report retained; last 16 retired-session summaries. Normal same-owner special states and UI pause; rearm stable normal TPS, or a confirmed personal-vehicle exit with settled on-foot bindings with released configured Sprint/Dash/Crouch/Jump actions, no ADS/slide/sprint/Dash. No elapsed-time scheduler.', scope_limits='Refactored V3 lifecycle; regression after cleanup remains required. Death, FFYL, Second Wind and respawn are not validated. Any ClientRestart retires safely, but rearming still requires the full on-foot guards. Unknown unannounced identity changes, build/ownership/cleanup errors fail closed.')
         # Mod disable reaches finish() through the explicit mod_shutdown stage.
         self.input_owner = None
+        self.rebind_cache = RebindCache(self)
+        self.vehicle = None
 
     def event(self, name, **data):
         if self.phase == name and (not data):
@@ -56,7 +60,7 @@ class LifecycleSupervisor:
         if owner is None or not getattr(owner, 'active', False):
             raise RuntimeError('Existing update producer required')
         self.active = True
-        plans = ((self.mod.FIRST_PERSON_ANIM_HOOK, hooks.Type.PRE, KEY + '.lifecycle_pre', self.frame), (self.mod.CLIENT_RESTART_FUNCTION, hooks.Type.PRE, KEY + '.restart_pre', self.restart_pre))
+        plans = ((self.mod.FIRST_PERSON_ANIM_HOOK, hooks.Type.PRE, KEY + '.lifecycle_pre', self.frame), (self.mod.CLIENT_RESTART_FUNCTION, hooks.Type.PRE, KEY + '.restart_pre', self.restart_pre), (self.mod.CLIENT_RESTART_FUNCTION, hooks.Type.POST_UNCONDITIONAL, KEY + '.restart_post', self.restart_post), (self.mod.FIRST_PERSON_ANIM_HOOK, hooks.Type.POST_UNCONDITIONAL, KEY + '.vehicle', self.vehicle_frame))
         for path, kind, name, callback in plans:
             spec = (path, kind, name)
             if self.updates.has_hook(*spec):
@@ -92,6 +96,7 @@ class LifecycleSupervisor:
             self.report['retired_sessions'][-1]['pose_diagnostics'] = self.retained_pose_diagnostics(r)
         del self.report['retired_sessions'][:-16]
         self.child = None
+        self.rebind_cache.bones = None
         setattr(self.mod, KEY, getattr(self, 'lifecycle_supervisor', self))
         self.report['native_patches'] = 0
         self.report['sdk_hooks'] = len(self.registered)
@@ -127,12 +132,31 @@ class LifecycleSupervisor:
             previous = None if self.child is None else self.child.refs[0]()
             if obj != pc and obj != previous:
                 return
+            if self.vehicle is not None:
+                self.vehicle.restart('PRE', obj, args)
+                if not self.active:
+                    return
             new_pawn = getattr(args, 'NewPawn', None)
             self.event('CLIENT_RESTART_PRE', new_pawn=None if new_pawn is None else describe(new_pawn))
             self.retire('CLIENT_RESTART_NATIVE_HANDOFF')
             self.restart_wait = True
         except Exception as exc:
             self.fail('restart_pre', exc)
+
+    def restart_post(self, obj, args, ret, func):
+        if self.active and self.vehicle is not None:
+            self.vehicle.restart('POST', obj, args)
+
+    def vehicle_frame(self, obj, args, ret, func):
+        if not self.active or not self.updates.is_game_thread():
+            return
+        try:
+            if self.vehicle is None:
+                self.vehicle = VehicleHandoff(self)
+            self.vehicle.frame()
+            self.report['vehicle_native_patches'] = 0 if self.vehicle is None else self.vehicle.patch_count()
+        except Exception as exc:
+            self.fail('vehicle_frame', exc)
 
     def eligible(self):
         pc, pawn, camera = self.mod._get_runtime()
@@ -156,8 +180,9 @@ class LifecycleSupervisor:
         if str(camera.GetActorCameraMode(pawn)) != 'ThirdPerson':
             return (None, 'WAITING_CAMERA_MODE')
         movement = pawn.OakCharacterMovement
-        if movement is None or int(movement.MovementMode) != 1:
-            return (None, 'WAITING_GROUNDED')
+        if (movement is None or int(movement.MovementMode) != 1) and not allow_exit_air(self, pc, pawn, camera, movement):
+            air = getattr(self.vehicle, 'air', None)
+            return (None, air.wait_reason(self) if air is not None else 'WAITING_GROUNDED')
         if any((bool(getattr(self.mod, k, False)) for k in ('_ads_active', '_slide_active', '_ladder_active'))):
             return (None, 'WAITING_NORMAL_MOVEMENT')
         if bool(pawn.IsCharacterDashing()) or bool(movement.bWantsToDash):
@@ -239,6 +264,9 @@ class LifecycleSupervisor:
             self.sequence += 1
             child.report['lifecycle_session_sequence'] = self.sequence
             child.install()
+            if self.vehicle is not None and self.vehicle.air is not None and self.vehicle.air.ticket is not None:
+                with self.rebind_cache.transaction(child):
+                    self.vehicle.air.air_start(child)
             self.restart_wait = False
             self.report['rebind_count'] += 1
             self.report['sdk_hooks'] = len(self.registered) + 1 + int(
@@ -272,6 +300,17 @@ class LifecycleSupervisor:
     def finish(self, reason):
         self.active = False
         failures = []
+        if self.vehicle is not None:
+            try:
+                self.vehicle.stop()
+                self.report['vehicle_handoff'] = self.vehicle.report
+                if self.vehicle.air is not None:
+                    self.report['vehicle_exit_air'] = self.vehicle.air.report
+                self.vehicle = None
+            except Exception as exc:
+                failures.append('vehicle: ' + repr(exc))
+        self.report['rebind_optimization'] = dict(self.rebind_cache.totals)
+        self.rebind_cache.clear()
         if self.child is not None:
             try:
                 self.retire(reason)
@@ -290,7 +329,7 @@ class LifecycleSupervisor:
                 failures.append('lifecycle: ' + repr(exc))
         for failure in failures:
             self.report['errors'].append(dict(where='cleanup', error=failure[:1000]))
-        self.report.update(status=reason if not failures else 'CLEANUP_INCOMPLETE', updates_seen=self.frames, duration_seconds=monotonic() - self.started, cleanup_complete=not failures, sdk_hooks=len(self.registered) + (int(self.child.registered) + int(getattr(getattr(self.child, 'grenade_facing', None), 'registered', False)) if self.child is not None else 0), native_patches=0 if self.child is None else self.child.report.get('native_patches'), cleanup_failures=failures)
+        self.report.update(status=reason if not failures else 'CLEANUP_INCOMPLETE', updates_seen=self.frames, duration_seconds=monotonic() - self.started, cleanup_complete=not failures, sdk_hooks=len(self.registered) + (int(self.child.registered) + int(getattr(getattr(self.child, 'grenade_facing', None), 'registered', False)) if self.child is not None else 0), native_patches=(0 if self.child is None else self.child.report.get('native_patches', 0)) + (0 if self.vehicle is None else self.vehicle.patch_count()), cleanup_failures=failures)
         # Production writes a report only when something went wrong.
         saved = None
         if self.diagnostics or failures or self.report['errors']:
@@ -307,6 +346,12 @@ class LifecycleSupervisor:
 
     def save_report(self, reason='MANUAL_REPORT'):
         """Write the current bounded state without stopping (console 'report')."""
+        self.report['rebind_optimization'] = dict(self.rebind_cache.totals)
+        self.report['vehicle_native_patches'] = 0 if self.vehicle is None else self.vehicle.patch_count()
+        if self.vehicle is not None:
+            self.report['vehicle_handoff'] = self.vehicle.report
+            if self.vehicle.air is not None:
+                self.report['vehicle_exit_air'] = self.vehicle.air.report
         snapshot = dict(self.report, status='RUNNING', snapshot_reason=reason, updates_seen=self.frames, duration_seconds=monotonic() - self.started)
         if self.child is not None:
             snapshot['current_gameplay'] = self.child.report
