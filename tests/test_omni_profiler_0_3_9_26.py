@@ -18,7 +18,7 @@ class ProfilerTests(unittest.TestCase):
     def setUp(self):
         self.directory = TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
-        self.owner = S(MOD_VERSION='0.3.9.31', SETTINGS_DIR=self.directory.name,
+        self.owner = S(MOD_VERSION='0.3.9.32', SETTINGS_DIR=self.directory.name,
                        logging=support.sdk.logging, _native_read=lambda address, size: bytes(size),
                        _get_runtime=lambda: (None, None, None))
         self.sample = dict(normal_tps_sample=True, movement_input_active=False, horizontal_speed=0.)
@@ -196,7 +196,7 @@ class ProfilerTests(unittest.TestCase):
         script = Path(__file__).with_name('omni_profiler_loader_scenario.py')
         result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout), dict(version='0.3.9.31', updates=600, restored=True))
+        self.assertEqual(json.loads(result.stdout), dict(version='0.3.9.32', updates=600, restored=True))
 
 
 if __name__ == '__main__':

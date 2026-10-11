@@ -303,7 +303,7 @@ class GrenadeClassTests(unittest.TestCase):
 
 
 class ExitFacingTests(unittest.TestCase):
-    """0.3.9.29.1: a parked/settling vehicle keeps its body yaw on exit."""
+    """0.3.9.32: exit facing follows the vehicle body at every speed."""
 
     def facing(self):
         exit_ = vx.ExitFacing.__new__(vx.ExitFacing)
@@ -331,18 +331,18 @@ class ExitFacingTests(unittest.TestCase):
             with self.subTest(velocity=velocity):
                 exit_ = self.publish(self.facing(), velocity)
                 self.assertEqual(exit_.last_yaw, 90.)
-                self.assertEqual(exit_.source, 'vehicle_body_below_travel_speed')
+                self.assertEqual(exit_.source, 'vehicle_body_orientation')
 
-    def test_driving_uses_travel_direction(self):
+    def test_driving_keeps_body_orientation(self):
         exit_ = self.publish(self.facing(), (0., 600.), body_yaw=75.)
-        self.assertAlmostEqual(exit_.last_yaw, 90.)
-        self.assertEqual(exit_.source, 'vehicle_travel_direction')
+        self.assertAlmostEqual(exit_.last_yaw, 75.)
+        self.assertEqual(exit_.source, 'vehicle_body_orientation')
         exit_ = self.publish(self.facing(), (-400., 0.), body_yaw=0.)
-        self.assertAlmostEqual(abs(exit_.last_yaw), 180.)
+        self.assertAlmostEqual(exit_.last_yaw, 0.)
 
     def test_stopping_after_driving_returns_to_body_yaw(self):
         exit_ = self.publish(self.facing(), (600., 0.), body_yaw=10.)
-        self.assertAlmostEqual(exit_.last_yaw, 0.)
+        self.assertAlmostEqual(exit_.last_yaw, 10.)
         exit_ = self.publish(exit_, (20., 0.), body_yaw=10.)
         self.assertEqual(exit_.last_yaw, 10.)
 

@@ -21,10 +21,6 @@ ORIGINAL = bytes.fromhex('488b831017000066440f288c2420020000')
 CONTINUATION = bytes.fromhex('66440f168c2428020000')
 PC_TABLE, VEHICLE_TABLE, CHARACTER_TABLE, MOVEMENT_TABLE = 0xB98A160, 0xB8D0A80, 0xB6F4080, 0xB709670
 CAPACITY, RECORD_SIZE, MAX_SAMPLES = 64, 128, 2048
-# Below this horizontal speed (cm/s) a parked or settling vehicle has no travel
-# direction: summon drop, suspension and micro-roll give arbitrary or backward
-# velocity vectors. The exit then keeps the vehicle body yaw.
-MIN_TRAVEL_SPEED = 150.0
 SENTINEL = b'\x11' * 8
 PREFIX = bytes.fromhex('9c504152415349ba111111111111111149833a010f8578010000493b5a180f856e010000654c8b1c25480000004d3b5a100f855b010000498b42084c8b184d3b5a500f854a0100004c8b98a83900004939db0f853a0100004c8b98d00300004939db740a4d3b5a200f85240100004c8b1b4d3b5a580f85170100004c8b9b101700004d3b5a200f8506010000498b03493b42680f85f9000000498b8350680000493b42280f85e8000000493b83300400000f85db0000004c8b184d3b5a600f85ce0000004d8b5a404983fb400f83c000000049c1e3074d035a38498b420849894308498b421849894310498b422049894318498b422849894320488b84244002000049894328488b84244802000049894330488b84245002000049894338498b4230488984244802000049894340498b424849894348498b427049894350498b4208488b801004000049894358488b84242003000049894360488b84242803000049894368488b84243003000049894370498b4208488b80d00300004989437849c7030100000049ff424049c70200000000415b415a589d')
 PREFIX_HASH = '77205102eaa3dbb638cc18b29b6f0f845335df61df79fa912ff4eeef99a93d81'
@@ -393,13 +389,10 @@ class ExitFacing:
             self.vehicle_ref = WeakPointer(pawn)
         velocity = components(pawn.GetVelocity(), ('X', 'Y', 'Z'))
         speed = math.hypot(velocity['X'], velocity['Y'])
-        if speed >= MIN_TRAVEL_SPEED:
-            self.last_yaw = math.degrees(math.atan2(velocity['Y'], velocity['X']))
-            self.source = 'vehicle_travel_direction'
-        else:
-            # Parked, settling or creeping: the vehicle body, not velocity noise.
-            self.last_yaw = float(components(pawn.K2_GetActorRotation(), ('Pitch', 'Yaw', 'Roll'))['Yaw'])
-            self.source = 'vehicle_body_below_travel_speed'
+        # Exit facing follows the vehicle's current body, including after a
+        # short turn, strafe, drift or reverse. Velocity is diagnostic only.
+        self.last_yaw = float(components(pawn.K2_GetActorRotation(), ('Pitch', 'Yaw', 'Roll'))['Yaw'])
+        self.source = 'vehicle_body_orientation'
         self.last_speed = speed
         if seat_start:
             summon = getattr(self.owner, 'summon', None)
@@ -491,6 +484,32 @@ class ExitFacing:
     def disarm(self):
         self.control[0] = self.gap_control[0] = 0
 
+    def exit_snapshot(self, count):
+        """Decode the existing native scratch record, without changing its stub.
+
+        PREFIX records 16 qwords: flag, PC/vehicle/character/movement, original
+        rotation, applied yaw, publication update/sequence, camera yaw and tail.
+        This is report-only; unavailable diagnostics never affect handoff.
+        """
+        try:
+            if not 1 <= count <= CAPACITY:
+                raise ValueError('Exit record count outside scratch capacity')
+            row = struct.unpack_from('<16Q', self.buffer, (count - 1) * RECORD_SIZE)
+            if (row[0] != 1 or row[1] != self.pc_address or row[2] != int(self.control[3])
+                    or row[3] != self.pawn_address or row[4] != self.movement_address):
+                raise ValueError('Exit record ownership differs')
+            def yaw(bits):
+                value = struct.unpack('<d', struct.pack('<Q', bits))[0]
+                if not math.isfinite(value):
+                    raise ValueError('Nonfinite exit record yaw')
+                return value
+            return dict(applied_yaw=yaw(row[8]), native_original_yaw=yaw(row[6]),
+                        native_camera_yaw=yaw(row[11]), publication_update=row[9],
+                        publication_sequence=row[10],
+                        publication_age_updates=self.frames - row[9])
+        except Exception as exc:
+            return dict(applied_yaw='?', native_record_error=repr(exc)[:160])
+
     def frame(self, pc, pawn, camera):
         previous_gap = bool(self.gap_control[0])
         self.disarm()
@@ -507,7 +526,8 @@ class ExitFacing:
             self.transition_validate()
             self.consumed = count
             self.owner.report['exit_rotations'] += 1
-            row = dict(applied_yaw=hitch.value(lambda: self.last_yaw),
+            row = dict(**self.exit_snapshot(count),
+                       published_yaw=hitch.value(lambda: self.last_yaw),
                        source=getattr(self, 'source', None),
                        vehicle_speed=hitch.value(lambda: self.last_speed),
                        character_yaw=hitch.value(lambda: character.K2_GetActorRotation().Yaw),

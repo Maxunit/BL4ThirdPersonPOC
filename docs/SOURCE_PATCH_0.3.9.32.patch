@@ -1,0 +1,737 @@
+diff --git a/BL4ThirdPersonPOC/__init__.py b/BL4ThirdPersonPOC/__init__.py
+index 636a2215b727f2d3b4fb1871fa0b141cfb4dc225..00bf9042a9c794246607b710e930b396660cfebf 100644
+--- a/BL4ThirdPersonPOC/__init__.py
++++ b/BL4ThirdPersonPOC/__init__.py
+@@ -12,7 +12,7 @@ Native lifetime and handoff contracts are described in docs/NATIVE_LIFECYCLE.md.
+ from __future__ import annotations
+ 
+ # Available before build_mod invokes the automatic enable callback.
+-MOD_VERSION = "0.3.9.31"
++MOD_VERSION = "0.3.9.32"
+ HYBRID_ADS_AVAILABLE = True  # optional Hybrid diagnostics QA
+ 
+ import builtins
+diff --git a/BL4ThirdPersonPOC/omni/vehicle_exit.py b/BL4ThirdPersonPOC/omni/vehicle_exit.py
+index 5d924d8e52e902e232fb88091049349db7362ff2..69d71901d8243facd97481be42bcca76f3f0fc23 100644
+--- a/BL4ThirdPersonPOC/omni/vehicle_exit.py
++++ b/BL4ThirdPersonPOC/omni/vehicle_exit.py
+@@ -21,10 +21,6 @@ ORIGINAL = bytes.fromhex('488b831017000066440f288c2420020000')
+ CONTINUATION = bytes.fromhex('66440f168c2428020000')
+ PC_TABLE, VEHICLE_TABLE, CHARACTER_TABLE, MOVEMENT_TABLE = 0xB98A160, 0xB8D0A80, 0xB6F4080, 0xB709670
+ CAPACITY, RECORD_SIZE, MAX_SAMPLES = 64, 128, 2048
+-# Below this horizontal speed (cm/s) a parked or settling vehicle has no travel
+-# direction: summon drop, suspension and micro-roll give arbitrary or backward
+-# velocity vectors. The exit then keeps the vehicle body yaw.
+-MIN_TRAVEL_SPEED = 150.0
+ SENTINEL = b'\x11' * 8
+ PREFIX = bytes.fromhex('9c504152415349ba111111111111111149833a010f8578010000493b5a180f856e010000654c8b1c25480000004d3b5a100f855b010000498b42084c8b184d3b5a500f854a0100004c8b98a83900004939db0f853a0100004c8b98d00300004939db740a4d3b5a200f85240100004c8b1b4d3b5a580f85170100004c8b9b101700004d3b5a200f8506010000498b03493b42680f85f9000000498b8350680000493b42280f85e8000000493b83300400000f85db0000004c8b184d3b5a600f85ce0000004d8b5a404983fb400f83c000000049c1e3074d035a38498b420849894308498b421849894310498b422049894318498b422849894320488b84244002000049894328488b84244802000049894330488b84245002000049894338498b4230488984244802000049894340498b424849894348498b427049894350498b4208488b801004000049894358488b84242003000049894360488b84242803000049894368488b84243003000049894370498b4208488b80d00300004989437849c7030100000049ff424049c70200000000415b415a589d')
+ PREFIX_HASH = '77205102eaa3dbb638cc18b29b6f0f845335df61df79fa912ff4eeef99a93d81'
+@@ -393,13 +389,10 @@ class ExitFacing:
+             self.vehicle_ref = WeakPointer(pawn)
+         velocity = components(pawn.GetVelocity(), ('X', 'Y', 'Z'))
+         speed = math.hypot(velocity['X'], velocity['Y'])
+-        if speed >= MIN_TRAVEL_SPEED:
+-            self.last_yaw = math.degrees(math.atan2(velocity['Y'], velocity['X']))
+-            self.source = 'vehicle_travel_direction'
+-        else:
+-            # Parked, settling or creeping: the vehicle body, not velocity noise.
+-            self.last_yaw = float(components(pawn.K2_GetActorRotation(), ('Pitch', 'Yaw', 'Roll'))['Yaw'])
+-            self.source = 'vehicle_body_below_travel_speed'
++        # Exit facing follows the vehicle's current body, including after a
++        # short turn, strafe, drift or reverse. Velocity is diagnostic only.
++        self.last_yaw = float(components(pawn.K2_GetActorRotation(), ('Pitch', 'Yaw', 'Roll'))['Yaw'])
++        self.source = 'vehicle_body_orientation'
+         self.last_speed = speed
+         if seat_start:
+             summon = getattr(self.owner, 'summon', None)
+@@ -491,6 +484,32 @@ class ExitFacing:
+     def disarm(self):
+         self.control[0] = self.gap_control[0] = 0
+ 
++    def exit_snapshot(self, count):
++        """Decode the existing native scratch record, without changing its stub.
++
++        PREFIX records 16 qwords: flag, PC/vehicle/character/movement, original
++        rotation, applied yaw, publication update/sequence, camera yaw and tail.
++        This is report-only; unavailable diagnostics never affect handoff.
++        """
++        try:
++            if not 1 <= count <= CAPACITY:
++                raise ValueError('Exit record count outside scratch capacity')
++            row = struct.unpack_from('<16Q', self.buffer, (count - 1) * RECORD_SIZE)
++            if (row[0] != 1 or row[1] != self.pc_address or row[2] != int(self.control[3])
++                    or row[3] != self.pawn_address or row[4] != self.movement_address):
++                raise ValueError('Exit record ownership differs')
++            def yaw(bits):
++                value = struct.unpack('<d', struct.pack('<Q', bits))[0]
++                if not math.isfinite(value):
++                    raise ValueError('Nonfinite exit record yaw')
++                return value
++            return dict(applied_yaw=yaw(row[8]), native_original_yaw=yaw(row[6]),
++                        native_camera_yaw=yaw(row[11]), publication_update=row[9],
++                        publication_sequence=row[10],
++                        publication_age_updates=self.frames - row[9])
++        except Exception as exc:
++            return dict(applied_yaw='?', native_record_error=repr(exc)[:160])
++
+     def frame(self, pc, pawn, camera):
+         previous_gap = bool(self.gap_control[0])
+         self.disarm()
+@@ -507,7 +526,8 @@ class ExitFacing:
+             self.transition_validate()
+             self.consumed = count
+             self.owner.report['exit_rotations'] += 1
+-            row = dict(applied_yaw=hitch.value(lambda: self.last_yaw),
++            row = dict(**self.exit_snapshot(count),
++                       published_yaw=hitch.value(lambda: self.last_yaw),
+                        source=getattr(self, 'source', None),
+                        vehicle_speed=hitch.value(lambda: self.last_speed),
+                        character_yaw=hitch.value(lambda: character.K2_GetActorRotation().Yaw),
+diff --git a/BL4ThirdPersonPOC/omni/vehicle_summon.py b/BL4ThirdPersonPOC/omni/vehicle_summon.py
+index 82b934625fda98800a8796c6f254ac172004c870..823fda9ab098c53ab08f0ec09e1959bb6306213d 100644
+--- a/BL4ThirdPersonPOC/omni/vehicle_summon.py
++++ b/BL4ThirdPersonPOC/omni/vehicle_summon.py
+@@ -300,7 +300,7 @@ class SummonFacing:
+         self.boot_buffer = (ctypes.c_ubyte * (BOOT_CAPACITY * RECORD_SIZE))()
+         self.native_hooks, self.attempted = {}, set()
+         self.frames, self.boot_consumed = 0, 0
+-        self.last_yaw, self.source = rot_yaw(pawn), 'body_without_observed_input'
++        self.last_yaw, self.source = rot_yaw(pawn), 'current_character_body'
+         self.report = dict(handoffs=[], scope={})
+         self.drive_module = importlib.import_module('BL4ThirdPersonPOC.vehicle_control')
+         self.drive_owner = getattr(self.drive_module, '_owner', None)
+@@ -365,8 +365,10 @@ class SummonFacing:
+             and camera.CameraModeInputs.ViewTarget == pawn
+             and str(camera.GetActorCameraMode(pawn)) == 'ThirdPerson')
+         if allowed:
+-            yaw = vector_yaw(pawn.GetLastMovementInputVector())
+-            if yaw is not None: self.last_yaw = yaw
++            # Input is a requested direction, not the actual body orientation.
++            # Refresh even while idle or after an exit changed the actor yaw.
++            self.last_yaw = rot_yaw(pawn)
++            self.source = 'current_character_body'
+             # Previous seat tickets have ended. Reset bounded records with both
+             # the summon gate and boot gate closed; the native GameThread is ours.
+             if not self.control[16] and not self.control[8]:
+diff --git a/BL4ThirdPersonPOC/pyproject.toml b/BL4ThirdPersonPOC/pyproject.toml
+index e7496579a0aa9aea30e6fea973175b5810af5bbc..5ffad8b769af1fbcd691b3b0ea641494a264ef83 100644
+--- a/BL4ThirdPersonPOC/pyproject.toml
++++ b/BL4ThirdPersonPOC/pyproject.toml
+@@ -1,12 +1,12 @@
+ [project]
+ name = "BL4ThirdPersonPOC"
+-version = "0.3.9.24"
++version = "0.3.9.32"
+ description = "Third-person camera mod for Borderlands 4 with hybrid ADS, beta FFYL/Ground Slam and experimental omnidirectional movement."
+ authors = [{ name = "Maxunit & Kira" }]
+ 
+ [tool.sdkmod]
+ name = "BL4 Third Person PoC"
+-version = "0.3.9.24"
++version = "0.3.9.32"
+ supported_games = ["BL4"]
+ coop_support = "ClientSide"
+ 
+diff --git a/README.md b/README.md
+index 9842fd7f91531f9e486a2294049c31fe7798a9fb..0955019d69cd59a051d08cf248c2f136df19b4c5 100644
+--- a/README.md
++++ b/README.md
+@@ -1,14 +1,17 @@
+-# BL4ThirdPersonPOC 0.3.9.31 Summon Seat QA
+-
+-Basiert auf 0.3.9.30. Beim Lichtschützen (Fahrzeug ohne sichtbare Figur) dreht
+-Omni die Kamera hinter das gerufene Fahrzeug, wenn sie mehr als 90° von der
+-Figurrichtung weg steht. Sonst würde sich das Fahrzeug selbst zur Kamera drehen.
+-Alle Fahrzeuge mit sichtbarem Fahrer bleiben unverändert. Neue Zeile
+-`[OmniVehicle] summon` pro Einstieg zeigt Erkennung, Kamera und Drehung.
+-
+-- [Befund und Änderungen](docs/CHANGELOG_0.3.9.31_SUMMON_SEAT_QA.md)
+-- [Testplan](docs/TESTPLAN_0.3.9.31_SUMMON_SEAT_QA.md)
+-- [Lokale Validierung](docs/VALIDATION_0.3.9.31_SUMMON_SEAT_QA.md)
++# BL4ThirdPersonPOC 0.3.9.32 Vehicle Facing QA
++
++Basiert auf der Repo-.31, Commit `001a62a45d7f9307f1b91088e7b25bfba63d0941`.
++Beim Ausstieg gilt jetzt die Fahrzeugausrichtung bei jedem Tempo, einschließlich
++kurzer WASD-Tipps, Rückwärtsfahrt und Drift. Der Summon-Publisher verwendet die
++aktuelle Actor-Rotation der Figur statt ihrer letzten Bewegungseingabe.
++Der bestehende Native-Ausstiegsbericht enthält den tatsächlich angewandten Yaw.
++Die Lichtschützen-Kamera-Korrektur und die Performance-Arbeit der Repo-.31 sind
++enthalten. Spieltest der beiden verbleibenden Fehler erforderlich.
++
++- [Befund und Änderungen](docs/CHANGELOG_0.3.9.32_VEHICLE_FACING_QA.md)
++- [Kurzer Spieltest](docs/TESTPLAN_0.3.9.32_VEHICLE_FACING_QA.md)
++- [Lokale Validierung](docs/VALIDATION_0.3.9.32_VEHICLE_FACING_QA.md)
++- Vorgänger: [0.3.9.31 Summon Seat](docs/CHANGELOG_0.3.9.31_SUMMON_SEAT_QA.md)
+ - Vorgänger: [0.3.9.30 Exit Facing](docs/CHANGELOG_0.3.9.30_VEHICLE_EXIT_FACING_QA.md),
+   [0.3.9.29 Bind & Hitch](docs/CHANGELOG_0.3.9.29_OMNI_BIND_HITCH_QA.md),
+   [0.3.9.28 Callback-Scope](docs/CHANGELOG_0.3.9.28_OMNI_CALLBACK_SCOPE_QA.md)
+diff --git a/docs/CHANGELOG_0.3.9.32_VEHICLE_FACING_QA.md b/docs/CHANGELOG_0.3.9.32_VEHICLE_FACING_QA.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..7babb06fba0106264a09e6fdf3107353a5902957
+--- /dev/null
++++ b/docs/CHANGELOG_0.3.9.32_VEHICLE_FACING_QA.md
+@@ -0,0 +1,79 @@
++# 0.3.9.32 – Fahrzeugausrichtung beim Rufen und Aussteigen
++
++Basis: Repo-.31, Commit `001a62a45d7f9307f1b91088e7b25bfba63d0941` in
++`Maxunit/BL4ThirdPersonPOC`. Die Repo-.28/.29 sind eigene Callback-Scope-/Bind-
++Builds; sie entsprechen nicht den früher in diesem Chat getesteten Batch- bzw.
++Sampling-Builds mit denselben Versionsnummern.
++
++## Gemeldete Fehler und gewünschtes Verhalten
++
++- Fahrzeug rufen, W/S/A/D kurz antippen, direkt aussteigen: Figur steht oft
++  in einer anderen Richtung als das Fahrzeug.
++- Gerufenes Fahrzeug steht gelegentlich anders als die Figur zuvor.
++- Für den Ausstieg wurde Fahrzeugausrichtung bestätigt, auch bei Rückwärtsfahrt
++  oder einer seitlichen Bewegung des Fahrzeugs.
++
++## Zwei widersprüchliche Richtungsquellen in .31
++
++`ExitFacing.publish_vehicle` wählte ab 150 cm/s weiterhin die waagerechte
++Geschwindigkeitsrichtung. Bei Rückwärtsfahrt, seitlicher Fahrt, Drift oder
++einem kurzen Steuerimpuls kann sie erheblich von der Fahrzeugrotation abweichen.
++Die Geschwindigkeitsgrenze aus .30 korrigierte nur stehende/kriechende Fahrzeuge.
++
++`SummonFacing.frame` übernahm die letzte native Movement-Eingaberichtung. Das
++ist das Ziel der Bewegung und nicht die momentan erreichte Actor-Rotation.
++Zudem blieb die gespeicherte Summon-Richtung ohne aktive Eingabe erhalten,
++auch wenn ein Fahrzeugausstieg inzwischen die Actor-Rotation geändert hatte.
++
++Diese Abweichungen sind im Code nachweisbar. Ob zusätzlich eine spätere
++Fahrzeug-/Kamera-Übergabe beteiligt ist, muss der Spieltest zeigen.
++
++## Änderungen
++
++1. Der Ausstiegs-Publisher verwendet bei jedem Tempo die aktuelle
++   `K2_GetActorRotation().Yaw` des eigenen Fahrzeugs. Velocity wird weiterhin
++   für den Report gelesen und geprüft; sie bestimmt die Ausstiegsrichtung nicht.
++   Quelle im Report: `vehicle_body_orientation`.
++2. Der Summon-Publisher liest in jedem zugelassenen On-foot-Update die aktuelle
++   Figurenrotation über den vorhandenen `rot_yaw`-Leser. Das gilt auch ohne
++   Bewegungseingabe und nach einem Fahrzeugausstieg. Quelle:
++   `current_character_body`. Das ersetzt einen Input-Getter durch einen
++   Actor-Getter; keine zusätzliche On-foot-UFunction-Abfrage.
++3. `[OmniVehicle] exit` und `vehicle_handoff.exit_facings` lesen den angewandten
++   Winkel aus dem bestehenden Native-Scratch-Datensatz. In .31 wurde unter
++   `applied_yaw` nur der zuletzt vom Python-Publisher gehaltene Winkel angezeigt.
++
++| Feld | Bedeutung |
++| --- | --- |
++| `applied_yaw` | Vom nativen Ausstieg tatsächlich eingesetzter Winkel |
++| `published_yaw` | Zuletzt vom Publisher beobachteter Zielwinkel |
++| `native_original_yaw` | Ursprünglicher Winkel der nativen Ausstiegsberechnung vor dem Override |
++| `native_camera_yaw` | Controller-Kamerawinkel beim nativen Ausstieg |
++| `publication_update`, `publication_sequence` | Zugehörige Veröffentlichung und Sitzfolge |
++| `publication_age_updates` | Vehicle-Updates zwischen Veröffentlichung und Lesen des Exit-Datensatzes |
++| `character_yaw` | Figurenwinkel beim späteren Lesen des Exit-Datensatzes |
++| `native_record_error` | Diagnosefehler; kein Einfluss auf Gameplay oder Handoff |
++
++Der vorhandene 128-Byte-Datensatz wird unverändert gelesen; keine neue native
++Adresse, kein veränderter Stub und kein weiterer Hook. Trace/Reports bleiben
++begrenzt und verwenden weiterhin die bestehende .31-Infrastruktur.
++
++## Grenzen und Kosten
++
++- Die Veröffentlichung erfolgt im vorhandenen Vehicle-POST. Sie ist eine
++  Beobachtung aus einem Update, kein atomarer SDK-Getter im nativen Summon- oder
++  Ausstiegsmoment. Die zusätzlichen Reportwerte helfen, alte Veröffentlichungen
++  oder eine spätere Änderung der Figurenrichtung zu erkennen.
++- Die eigentliche Figurenanimation kann von ihrer Actor-Rotation abweichen;
++  dieser Build orientiert sich an der Actor-Rotation.
++- Die Lichtschützen-Kamera-Korrektur aus .31 bleibt enthalten. Eine zusätzliche
++  kamerabhängige Fahrzeugdrehung wird durch diese Quellenkorrektur nicht
++  automatisch ausgeschlossen.
++- Bei schneller Fahrt kommt im Exit-Publisher nun auch der Actor-Getter hinzu,
++  den .31 nur unter 150 cm/s aufrief. Das ist der Preis der gewünschten
++  Fahrzeugausrichtung. Es wird kein FPS-Gewinn behauptet.
++
++Unverändert: Callback-Scope, Bind-Staffelung, Combat-/Input-Optimierungen,
++Summon-/Possession-/Boot-Stubs, Native-Adressen/Templates/Hashes sowie
++Installation, Guards und Cleanup. `pyproject.toml` wird vom veralteten .24-Eintrag
++auf .32 synchronisiert; Loader-Version ebenfalls .32.
+diff --git a/docs/PACKAGE_SHA256_0.3.9.32.json b/docs/PACKAGE_SHA256_0.3.9.32.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..d1d4f339b252740dcf096925fe147047a89d97cc
+--- /dev/null
++++ b/docs/PACKAGE_SHA256_0.3.9.32.json
+@@ -0,0 +1,70 @@
++{
++  "base_commit": "001a62a45d7f9307f1b91088e7b25bfba63d0941",
++  "base_repo": "Maxunit/BL4ThirdPersonPOC",
++  "version": "0.3.9.32",
++  "production_files": 108,
++  "changed": [
++    {
++      "path": "BL4ThirdPersonPOC/__init__.py",
++      "before_sha256": "f582ef48a5442da3bd1d6e4c9b6c0695f0aa45c580b4550a66024e8cb1ad7cc3",
++      "after_sha256": "41d3cd309310e5164c6b34f3cff67b44c3e96688ecfa67d32ccde8b368a7072a"
++    },
++    {
++      "path": "BL4ThirdPersonPOC/omni/vehicle_exit.py",
++      "before_sha256": "0c5ebde2ee0b5a02c168fb391c7fb00a88df339df2e12d17f033692402211c30",
++      "after_sha256": "1eebf839c4e069cbe30bc36b3f6afb008937414f6784b637eef8236a8f8803f1"
++    },
++    {
++      "path": "BL4ThirdPersonPOC/omni/vehicle_summon.py",
++      "before_sha256": "17e6fe1e790347d160051bfac9af594b9521cde4676510eabb378508d6c636ca",
++      "after_sha256": "c6db2566c86d68e08e5c2f51f19df6199c5ff634ac347c57bb532cded7236c61"
++    },
++    {
++      "path": "BL4ThirdPersonPOC/pyproject.toml",
++      "before_sha256": "bf9e66461fb9fa860bece0858a39382d34483bf86e263a20835e0c3411a5aa5c",
++      "after_sha256": "dbdb5b5055023066252408185672bed5399f06c41357256c2ebdc298db0a5977"
++    }
++  ],
++  "native_guards": {
++    "vehicle_exit.py": {
++      "unchanged_module_constants_except": [
++        "MIN_TRAVEL_SPEED"
++      ],
++      "unchanged_guard_and_install_functions": [
++        "components",
++        "controller_layout",
++        "field",
++        "install",
++        "live",
++        "review_field",
++        "stop",
++        "stub",
++        "validate_character",
++        "validate_dispatches",
++        "validate_gap_component",
++        "validate_gap_initial",
++        "validate_initial",
++        "verify_gap",
++        "verify_patch",
++        "yaw_bits"
++      ]
++    },
++    "vehicle_summon.py": {
++      "unchanged_module_constants_except": [],
++      "unchanged_guard_and_install_functions": [
++        "control_layout",
++        "field",
++        "install",
++        "live",
++        "rot_yaw",
++        "stop",
++        "stub",
++        "target",
++        "validate_initial",
++        "validate_static",
++        "vehicle_layout"
++      ]
++    }
++  },
++  "sdkmod_sha256": "0fca26cabacaffbd207034fc73988a5a362d74a739be66bca366e5957f75df4b"
++}
+diff --git a/docs/TESTPLAN_0.3.9.32_VEHICLE_FACING_QA.md b/docs/TESTPLAN_0.3.9.32_VEHICLE_FACING_QA.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..903e2b9fea8e07062bf75e87de5f661cca6886b3
+--- /dev/null
++++ b/docs/TESTPLAN_0.3.9.32_VEHICLE_FACING_QA.md
+@@ -0,0 +1,37 @@
++# 0.3.9.32 – kurzer Fahrzeugtest
++
++Spiel vollständig beenden, alte Mod und PyCache entfernen. Eine Variante
++installieren: `dist/BL4ThirdPersonPOC.sdkmod` oder Quellordner.
++Omni und kamerarelative Fahrzeugsteuerung einschalten. Erst normale TPS ohne ADS
++und ohne Menü verwenden. Für diesen Test sind keine Profiler-Aufnahmen nötig.
++
++## 1. Rufen
++
++- Kamera nach vorn, Figur durch Rückwärtslaufen zur Kamera ausrichten, loslassen.
++  Fahrzeug rufen: Richtung des gerufenen Fahrzeugs mit der Figur vergleichen.
++- Ebenso Figur seitlich ausrichten und rufen.
++- Nach einem Fahrzeugausstieg ohne erneutes Laufen direkt wieder rufen.
++
++Mit einem normalen Fahrzeug und dem Lichtschützen gegenprüfen. Beim
++Lichtschützen kann die Kamera wie bereits in .31 hinter das Fahrzeug drehen.
++
++## 2. Kurze Steuerimpulse und Ausstieg
++
++- Nach dem Rufen W kurz antippen und direkt aussteigen.
++- Separat mit S, A und D wiederholen; jeweils Fahrzeugausrichtung unmittelbar
++  vor dem Ausstieg mit der Figur danach vergleichen.
++- Einen Fall wiederholen, diesmal nach dem Tipp bis zum Stillstand warten.
++- Bei Gelegenheit aus Rückwärtsfahrt oder seitlicher Bewegung aussteigen.
++  Gewünscht ist immer die Fahrzeugausrichtung, auch wenn die Fahrtrichtung abweicht.
++
++## Zurückgeben
++
++Den Session-Log oder mindestens die zusammengehörigen Zeilen
++`[OmniVehicle] summon`, `[OmniVehicle] exit`, `[OmniVehicle] air_rebind` und
++`[OmniBind] ready` schicken. Zusätzlich kurz Fahrzeugtyp, Tipp-Taste und
++beobachtete falsche Richtung nennen. Bei einem verbleibenden Fehler kann ein
++kurzes Video die sichtbare Fahrzeug-/Figurendrehung ergänzen.
++
++Alternativ `bl4tps_omni report`: relevante Abschnitte sind
++`vehicle_handoff.exit_facings` und `vehicle_handoff.summon_seats`.
++Die Zeilen sind pro Spielsitzung begrenzt; der Report enthält die letzten Fälle.
+diff --git a/docs/TEST_OUTPUT_0.3.9.32.txt b/docs/TEST_OUTPUT_0.3.9.32.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..5d29e6ef9e0dd352e8aa7d8b624e857f76795d3f
+--- /dev/null
++++ b/docs/TEST_OUTPUT_0.3.9.32.txt
+@@ -0,0 +1,5 @@
++......................................s..s....................ss.............................................................................................................................................................................................................................................................................................................................................................................................................................................
++----------------------------------------------------------------------
++Ran 493 tests in 6.013s
++
++OK (skipped=4)
+diff --git a/docs/VALIDATION_0.3.9.32_VEHICLE_FACING_QA.md b/docs/VALIDATION_0.3.9.32_VEHICLE_FACING_QA.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..c16d047edbc9b432ad96aca6dd32f32e7ea6f58a
+--- /dev/null
++++ b/docs/VALIDATION_0.3.9.32_VEHICLE_FACING_QA.md
+@@ -0,0 +1,45 @@
++# 0.3.9.32 – lokale Validierung
++
++493 Tests: 489 erfolgreich, vier übersprungen wegen fehlender optionaler
++Keystone-/Capstone-Pakete. Befehl:
++`python3 -m unittest discover -s tests -p 'test_*.py'`.
++Ausgabe: `TEST_OUTPUT_0.3.9.32.txt`.
++
++14 neue Tests üben die echten Publisher und die bestehende Exit-Aufnahme aus:
++
++- Summon verwendet den aktuellen Actor-Yaw und liest den Input-Getter nicht.
++- Idle-/Post-exit-Drehungen ersetzen den alten Zielwinkel; Winkel werden gewrappt.
++- NaN/Inf bei Summon stoppt vor Veröffentlichung, mit bereits geschlossenem Gate.
++- Pause, fehlende aktive Session, Kamerablend, fremdes ViewTarget, Luft und
++  gesperrter Normal-Kontext lesen keinen Actor-Yaw und öffnen das Gate nicht.
++- Abgelaufene Figur oder fremder Controller schlagen vor dem neuen Getter fehl.
++- Alte geschlossene Sitz-/Summon-Tickets werden weiter gelöscht.
++- W/S/A/D-Richtungen mit 0, 20, 149, 150, 151 und 600 cm/s: Ausstiegsziel bleibt
++  Fahrzeug-Yaw. Kurze Drehungen werden auch vor dem Stillstand übernommen.
++- Nicht endliche Fahrzeugrotation veröffentlicht keinen neuen Zielwinkel.
++- Fremder Fahrer wird vor der Fahrzeugrotationsabfrage abgelehnt.
++- Native-Report liest den tatsächlich eingesetzten Winkel, Kamerawinkel,
++  Veröffentlichungsindex und das Alter aus dem bestehenden letzten Datensatz.
++- Defekte/fremde/nicht endliche Datensätze oder ungültige Anzahlen betreffen
++  ausschließlich die Diagnose.
++- Echter `ExitFacing.frame` übernimmt den Native-Winkel in den Report, bevor der
++  bestehende Sitzabschluss die Record-Zähler löscht.
++
++Die fünf bisherigen Exit-Facing-Tests wurden auf das bestätigte Verhalten
++Fahrzeugausrichtung bei jedem Tempo umgestellt. Die übrige .31-Serie inklusive
++Lichtschützen-, Handoff-, ADS-/Hybrid-Reticle-, Callback-Scope-, Bind-, Restore-
++und Profiler-Tests besteht weiter. Die Tests laden auch den gebauten `.sdkmod`.
++
++108 Produktionsdateien, davon vier geändert: Loader, Versionsmetadaten,
++`omni/vehicle_exit.py` und `omni/vehicle_summon.py`. Die restlichen 104 Dateien
++sind bytegleich mit dem gepinnten Repo-.31-Commit.
++
++In beiden Fahrzeugmodulen sind sämtliche Modulkonstanten/Native-Templates
++unverändert; nur die aufgegebene `MIN_TRAVEL_SPEED`-Konstante entfällt.
++27 Guard-/Layout-/Installer-/Restore-Funktionen sind AST-gleich mit .31.
++Einzelheiten und Quell-/Build-Hashes: `PACKAGE_SHA256_0.3.9.32.json`.
++
++SDKmod: 108 Dateien, Quellen bytegleich zum Archiv, CRC und Versionsangaben
++geprüft. Python-Caches sind ausgeschlossen. Linux/SDK-Ersatzobjekte ersetzen
++keinen Spieltest und beweisen keine FPS-Wirkung oder endgültige native Richtung
++im Windows-Livebetrieb. Es ist ein gezielter QA-Build.
+diff --git a/tests/test_ads_refactor_0_3_9_23.py b/tests/test_ads_refactor_0_3_9_23.py
+index fdb5f43fb009c7a70c3f0e9a3dc2d808c7bf4845..e97c38dd3baed7ff0a4dd1bcae3f6ca11da42762 100644
+--- a/tests/test_ads_refactor_0_3_9_23.py
++++ b/tests/test_ads_refactor_0_3_9_23.py
+@@ -337,7 +337,7 @@ class NativeOwnershipSourceTests(unittest.TestCase):
+         result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True)
+         self.assertEqual(result.returncode, 0, result.stderr)
+         output = json.loads(result.stdout)
+-        self.assertEqual(output["version"], "0.3.9.31")
++        self.assertEqual(output["version"], "0.3.9.32")
+         self.assertEqual(output["snapshot"]["entries"], 2)
+         self.assertEqual(output["snapshot"]["exits"], 2)
+         self.assertTrue(output["cleaned"])
+diff --git a/tests/test_omni_bind_hitch_0_3_9_29.py b/tests/test_omni_bind_hitch_0_3_9_29.py
+index cf378ad653e39542fb8601f04e4073a0090a6dc9..c5086702902b8bd6974b9c04afc72f8c6408ceb2 100644
+--- a/tests/test_omni_bind_hitch_0_3_9_29.py
++++ b/tests/test_omni_bind_hitch_0_3_9_29.py
+@@ -303,7 +303,7 @@ class GrenadeClassTests(unittest.TestCase):
+ 
+ 
+ class ExitFacingTests(unittest.TestCase):
+-    """0.3.9.29.1: a parked/settling vehicle keeps its body yaw on exit."""
++    """0.3.9.32: exit facing follows the vehicle body at every speed."""
+ 
+     def facing(self):
+         exit_ = vx.ExitFacing.__new__(vx.ExitFacing)
+@@ -331,18 +331,18 @@ class ExitFacingTests(unittest.TestCase):
+             with self.subTest(velocity=velocity):
+                 exit_ = self.publish(self.facing(), velocity)
+                 self.assertEqual(exit_.last_yaw, 90.)
+-                self.assertEqual(exit_.source, 'vehicle_body_below_travel_speed')
++                self.assertEqual(exit_.source, 'vehicle_body_orientation')
+ 
+-    def test_driving_uses_travel_direction(self):
++    def test_driving_keeps_body_orientation(self):
+         exit_ = self.publish(self.facing(), (0., 600.), body_yaw=75.)
+-        self.assertAlmostEqual(exit_.last_yaw, 90.)
+-        self.assertEqual(exit_.source, 'vehicle_travel_direction')
++        self.assertAlmostEqual(exit_.last_yaw, 75.)
++        self.assertEqual(exit_.source, 'vehicle_body_orientation')
+         exit_ = self.publish(self.facing(), (-400., 0.), body_yaw=0.)
+-        self.assertAlmostEqual(abs(exit_.last_yaw), 180.)
++        self.assertAlmostEqual(exit_.last_yaw, 0.)
+ 
+     def test_stopping_after_driving_returns_to_body_yaw(self):
+         exit_ = self.publish(self.facing(), (600., 0.), body_yaw=10.)
+-        self.assertAlmostEqual(exit_.last_yaw, 0.)
++        self.assertAlmostEqual(exit_.last_yaw, 10.)
+         exit_ = self.publish(exit_, (20., 0.), body_yaw=10.)
+         self.assertEqual(exit_.last_yaw, 10.)
+ 
+diff --git a/tests/test_omni_profiler_0_3_9_26.py b/tests/test_omni_profiler_0_3_9_26.py
+index 72e8c37fcf84e88ad2f9fda7de4a45a1e7c5bd52..abc100a6b4dc6636347325f42abab1a1387de1c9 100644
+--- a/tests/test_omni_profiler_0_3_9_26.py
++++ b/tests/test_omni_profiler_0_3_9_26.py
+@@ -18,7 +18,7 @@ class ProfilerTests(unittest.TestCase):
+     def setUp(self):
+         self.directory = TemporaryDirectory()
+         self.addCleanup(self.directory.cleanup)
+-        self.owner = S(MOD_VERSION='0.3.9.31', SETTINGS_DIR=self.directory.name,
++        self.owner = S(MOD_VERSION='0.3.9.32', SETTINGS_DIR=self.directory.name,
+                        logging=support.sdk.logging, _native_read=lambda address, size: bytes(size),
+                        _get_runtime=lambda: (None, None, None))
+         self.sample = dict(normal_tps_sample=True, movement_input_active=False, horizontal_speed=0.)
+@@ -196,7 +196,7 @@ class ProfilerTests(unittest.TestCase):
+         script = Path(__file__).with_name('omni_profiler_loader_scenario.py')
+         result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True)
+         self.assertEqual(result.returncode, 0, result.stderr)
+-        self.assertEqual(json.loads(result.stdout), dict(version='0.3.9.31', updates=600, restored=True))
++        self.assertEqual(json.loads(result.stdout), dict(version='0.3.9.32', updates=600, restored=True))
+ 
+ 
+ if __name__ == '__main__':
+diff --git a/tests/test_vehicle_facing_0_3_9_32.py b/tests/test_vehicle_facing_0_3_9_32.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..06d77eb6e496da0c0c9be4e1f0628e0bc765c9b2
+--- /dev/null
++++ b/tests/test_vehicle_facing_0_3_9_32.py
+@@ -0,0 +1,225 @@
++"""Real .32 publication paths and existing native record layout; SDK substitutes."""
++import ctypes
++import math
++import struct
++from types import SimpleNamespace as S
++from unittest.mock import Mock, patch
++import unittest
++
++import support
++from BL4ThirdPersonPOC.omni import hitch
++from BL4ThirdPersonPOC.omni.vehicle_summon import SummonFacing
++from BL4ThirdPersonPOC.omni.vehicle_exit import ExitFacing, CAPACITY, RECORD_SIZE
++import test_omni_bind_hitch_0_3_9_29 as bind_tests
++
++
++def bits(yaw):
++    return struct.unpack('<Q', struct.pack('<d', yaw))[0]
++
++
++class SummonWorld:
++    def __init__(self):
++        self.actor = S(Pitch=0., Yaw=30., Roll=0.)
++        self.pawn = S(Class=S(Name='OakCharacter'),
++                      OakCharacterMovement=S(MovementMode=1),
++                      K2_GetActorRotation=Mock(side_effect=lambda: self.actor),
++                      GetLastMovementInputVector=Mock(side_effect=AssertionError('input direction read')))
++        self.pc = S()
++        self.camera = S(CameraModeState=S(bIsTransitioning=False),
++                        CameraModeInputs=S(ViewTarget=self.pawn),
++                        GetActorCameraMode=lambda pawn: 'ThirdPerson')
++        self.session = S(active=True, special_paused=False)
++        facing = self.facing = SummonFacing.__new__(SummonFacing)
++        facing.control = [0] * 24
++        facing.control[5] = facing.control[13] = facing.control[19] = 2
++        facing.frames, facing.boot_consumed = 0, 2
++        facing.last_yaw, facing.source = -120., 'old_direction'
++        facing.pc_ref, facing.pawn_ref = lambda: self.pc, lambda: self.pawn
++        facing.seat_vehicle = facing.seat = None
++        facing.owner = S(sup=S(child=self.session), normal=lambda pc: True)
++        facing.mod = S(_third_person_pushed=True)
++
++    def tick(self):
++        self.facing.frame(self.pc, self.pawn, self.camera)
++
++    @property
++    def published_yaw(self):
++        return struct.unpack('<d', struct.pack('<Q', self.facing.control[4]))[0]
++
++
++class SummonBodyTests(unittest.TestCase):
++    def test_requested_input_cannot_replace_the_actual_body_yaw(self):
++        world = SummonWorld()
++        world.tick()
++        self.assertEqual(world.published_yaw, 30.)
++        self.assertEqual(world.facing.source, 'current_character_body')
++        world.pawn.GetLastMovementInputVector.assert_not_called()
++        self.assertEqual(world.pawn.K2_GetActorRotation.call_count, 1)
++        self.assertEqual(world.facing.control[0], 1)
++
++    def test_idle_turn_and_post_exit_rotation_replace_old_summon_yaw(self):
++        world = SummonWorld()
++        for yaw in (30., -90., 170., -179., 359.):
++            world.actor.Yaw = yaw
++            world.tick()
++            self.assertAlmostEqual(world.published_yaw, (yaw + 180.) % 360. - 180.)
++        self.assertEqual(world.facing.frames, 5)
++
++    def test_nonfinite_body_fails_with_summon_gate_already_closed(self):
++        for yaw in (math.nan, math.inf, -math.inf):
++            with self.subTest(yaw=yaw):
++                world = SummonWorld()
++                world.actor.Yaw = yaw
++                world.facing.control[0] = 1
++                with self.assertRaisesRegex(RuntimeError, 'Nonfinite actor yaw'):
++                    world.tick()
++                self.assertEqual(world.facing.control[0], 0)
++                self.assertEqual(world.published_yaw, 0.)
++
++    def test_paused_or_unready_context_does_not_read_or_publish_body(self):
++        for blocked in ('paused', 'inactive', 'camera_transition', 'view_target', 'movement', 'normal'):
++            with self.subTest(blocked=blocked):
++                world = SummonWorld()
++                if blocked == 'paused':
++                    world.session.special_paused = True
++                elif blocked == 'inactive':
++                    world.session.active = False
++                elif blocked == 'camera_transition':
++                    world.camera.CameraModeState.bIsTransitioning = True
++                elif blocked == 'view_target':
++                    world.camera.CameraModeInputs.ViewTarget = S()
++                elif blocked == 'movement':
++                    world.pawn.OakCharacterMovement.MovementMode = 3
++                else:
++                    world.facing.owner.normal = lambda pc: False
++                world.tick()
++                world.pawn.K2_GetActorRotation.assert_not_called()
++                self.assertEqual(world.facing.control[0], 0)
++
++    def test_expired_local_character_or_foreign_controller_fail_before_body_read(self):
++        for changed in ('character', 'controller'):
++            with self.subTest(changed=changed):
++                world = SummonWorld()
++                if changed == 'character':
++                    world.facing.pawn_ref = lambda: None
++                else:
++                    world.facing.pc_ref = lambda: S(foreign=True)
++                with self.assertRaisesRegex(RuntimeError, 'local owner expired'):
++                    world.tick()
++                world.pawn.K2_GetActorRotation.assert_not_called()
++                self.assertEqual(world.facing.control[0], 0)
++
++    def test_closed_old_seat_tickets_are_still_cleared(self):
++        world = SummonWorld()
++        world.tick()
++        self.assertEqual([world.facing.control[i] for i in (5, 13, 19)], [0, 0, 0])
++        self.assertEqual(world.facing.boot_consumed, 0)
++
++
++class VehicleBodyTests(unittest.TestCase):
++    def setUp(self):
++        self.helper = bind_tests.ExitFacingTests()
++
++    def test_all_four_tap_directions_keep_the_vehicle_orientation_at_every_speed(self):
++        for speed in (0., 20., 149., 150., 151., 600.):
++            for xy in ((speed, 0.), (-speed, 0.), (0., speed), (0., -speed)):
++                with self.subTest(velocity=xy):
++                    facing = self.helper.facing()
++                    with patch.object(hitch, 'note'):
++                        self.helper.publish(facing, xy, body_yaw=73.)
++                    self.assertEqual(facing.last_yaw, 73.)
++                    self.assertEqual(struct.unpack('<d', struct.pack('<Q', facing.control[6]))[0], 73.)
++                    self.assertEqual(facing.source, 'vehicle_body_orientation')
++
++    def test_short_turn_updates_publication_even_before_vehicle_stops(self):
++        facing = self.helper.facing()
++        with patch.object(hitch, 'note'):
++            for yaw, xy in ((0., (0., 0.)), (45., (-500., 0.)),
++                            (110., (0., -400.)), (110., (1., 1.))):
++                self.helper.publish(facing, xy, body_yaw=yaw)
++                self.assertEqual(facing.last_yaw, yaw)
++
++    def test_invalid_body_does_not_publish_a_new_yaw(self):
++        facing = self.helper.facing()
++        facing.control[6] = bits(55.)
++        with self.assertRaisesRegex(RuntimeError, 'Nonfinite SDK value'):
++            self.helper.publish(facing, (600., 0.), body_yaw=math.nan)
++        self.assertEqual(facing.control[6], bits(55.))
++
++    def test_foreign_driver_is_rejected_before_actor_getter(self):
++        facing = self.helper.facing()
++        getter = Mock(side_effect=AssertionError('foreign body read'))
++        vehicle = S(DriverPawn='other', K2_GetActorRotation=getter)
++        pc = S(PersonalVehicleState=S(Vehicle=vehicle), Pawn=vehicle)
++        with self.assertRaisesRegex(RuntimeError, 'possession/driver changed'):
++            facing.publish_vehicle(pc, vehicle, S())
++        getter.assert_not_called()
++
++
++class NativeExitReportTests(unittest.TestCase):
++    def facing(self):
++        facing = ExitFacing.__new__(ExitFacing)
++        facing.pc_address, facing.pawn_address, facing.movement_address = 0x10000, 0x20000, 0x30000
++        facing.control = [0] * 16
++        facing.control[3] = 0x40000
++        facing.frames = 102
++        facing.last_yaw = -45.  # Deliberately differs from what the native exit applied.
++        facing.buffer = (ctypes.c_ubyte * (CAPACITY * RECORD_SIZE))()
++        row = [1, facing.pc_address, 0x40000, facing.pawn_address, facing.movement_address,
++               bits(0.), bits(120.), bits(0.), bits(73.), 100, 3, bits(-90.), 0, 0, 0, 0]
++        return facing, row
++
++    def test_report_decodes_actual_applied_yaw_and_age_from_last_native_record(self):
++        facing, row = self.facing()
++        struct.pack_into('<16Q', facing.buffer, RECORD_SIZE, *row)
++        result = facing.exit_snapshot(2)
++        self.assertEqual(result, dict(applied_yaw=73., native_original_yaw=120.,
++                         native_camera_yaw=-90., publication_update=100,
++                         publication_sequence=3, publication_age_updates=2))
++        self.assertEqual(facing.last_yaw, -45.)
++
++    def test_malformed_foreign_or_nonfinite_records_only_fail_the_diagnostic(self):
++        for field in (0, 1, 2, 3, 4, 6, 8, 11):
++            with self.subTest(field=field):
++                facing, row = self.facing()
++                row[field] = bits(math.nan) if field in (6, 8, 11) else 0
++                struct.pack_into('<16Q', facing.buffer, 0, *row)
++                result = facing.exit_snapshot(1)
++                self.assertEqual(result['applied_yaw'], '?')
++                self.assertIn('native_record_error', result)
++
++    def test_invalid_count_is_bounded_and_report_only(self):
++        facing, _ = self.facing()
++        for count in (-1, 0, CAPACITY + 1):
++            result = facing.exit_snapshot(count)
++            self.assertEqual(result['applied_yaw'], '?')
++            self.assertIn('native_record_error', result)
++
++    def test_actual_exit_frame_reports_native_yaw_before_clearing_the_seat_buffer(self):
++        facing, row = self.facing()
++        struct.pack_into('<16Q', facing.buffer, 0, *row)
++        facing.control[8], facing.consumed = 1, 0
++        facing.gap_control = [0] * 16
++        facing.gap_seat_open = False
++        component = S()
++        movement = S(UpdatedComponent=component)
++        character = S(OakCharacterMovement=movement, CharacterMovement=movement,
++                      K2_GetActorRotation=lambda: S(Yaw=173.))
++        pc, camera = S(GetControlRotation=lambda: S(Yaw=-90.)), S()
++        facing.pc_ref, facing.camera_ref = lambda: pc, lambda: camera
++        facing.pawn_ref, facing.movement_ref = lambda: character, lambda: movement
++        facing.component_ref = lambda: component
++        facing.owner = S(report=dict(exit_rotations=0))
++        facing.last_speed, facing.source = 400., 'vehicle_body_orientation'
++        facing.transition_validate = Mock()
++        with patch.object(hitch, 'note'):
++            facing.frame(pc, character, camera)
++        result = facing.owner.report['exit_facings'][0]
++        self.assertEqual(result['applied_yaw'], 73.)
++        self.assertEqual(result['character_yaw'], '173')
++        self.assertEqual(facing.owner.report['exit_rotations'], 1)
++        self.assertEqual(facing.control[8], 0)
++
++
++if __name__ == '__main__':
++    unittest.main()

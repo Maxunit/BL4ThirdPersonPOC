@@ -1,0 +1,70 @@
+{
+  "base_commit": "001a62a45d7f9307f1b91088e7b25bfba63d0941",
+  "base_repo": "Maxunit/BL4ThirdPersonPOC",
+  "version": "0.3.9.32",
+  "production_files": 108,
+  "changed": [
+    {
+      "path": "BL4ThirdPersonPOC/__init__.py",
+      "before_sha256": "f582ef48a5442da3bd1d6e4c9b6c0695f0aa45c580b4550a66024e8cb1ad7cc3",
+      "after_sha256": "41d3cd309310e5164c6b34f3cff67b44c3e96688ecfa67d32ccde8b368a7072a"
+    },
+    {
+      "path": "BL4ThirdPersonPOC/omni/vehicle_exit.py",
+      "before_sha256": "0c5ebde2ee0b5a02c168fb391c7fb00a88df339df2e12d17f033692402211c30",
+      "after_sha256": "1eebf839c4e069cbe30bc36b3f6afb008937414f6784b637eef8236a8f8803f1"
+    },
+    {
+      "path": "BL4ThirdPersonPOC/omni/vehicle_summon.py",
+      "before_sha256": "17e6fe1e790347d160051bfac9af594b9521cde4676510eabb378508d6c636ca",
+      "after_sha256": "c6db2566c86d68e08e5c2f51f19df6199c5ff634ac347c57bb532cded7236c61"
+    },
+    {
+      "path": "BL4ThirdPersonPOC/pyproject.toml",
+      "before_sha256": "bf9e66461fb9fa860bece0858a39382d34483bf86e263a20835e0c3411a5aa5c",
+      "after_sha256": "dbdb5b5055023066252408185672bed5399f06c41357256c2ebdc298db0a5977"
+    }
+  ],
+  "native_guards": {
+    "vehicle_exit.py": {
+      "unchanged_module_constants_except": [
+        "MIN_TRAVEL_SPEED"
+      ],
+      "unchanged_guard_and_install_functions": [
+        "components",
+        "controller_layout",
+        "field",
+        "install",
+        "live",
+        "review_field",
+        "stop",
+        "stub",
+        "validate_character",
+        "validate_dispatches",
+        "validate_gap_component",
+        "validate_gap_initial",
+        "validate_initial",
+        "verify_gap",
+        "verify_patch",
+        "yaw_bits"
+      ]
+    },
+    "vehicle_summon.py": {
+      "unchanged_module_constants_except": [],
+      "unchanged_guard_and_install_functions": [
+        "control_layout",
+        "field",
+        "install",
+        "live",
+        "rot_yaw",
+        "stop",
+        "stub",
+        "target",
+        "validate_initial",
+        "validate_static",
+        "vehicle_layout"
+      ]
+    }
+  },
+  "sdkmod_sha256": "0fca26cabacaffbd207034fc73988a5a362d74a739be66bca366e5957f75df4b"
+}

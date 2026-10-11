@@ -300,7 +300,7 @@ class SummonFacing:
         self.boot_buffer = (ctypes.c_ubyte * (BOOT_CAPACITY * RECORD_SIZE))()
         self.native_hooks, self.attempted = {}, set()
         self.frames, self.boot_consumed = 0, 0
-        self.last_yaw, self.source = rot_yaw(pawn), 'body_without_observed_input'
+        self.last_yaw, self.source = rot_yaw(pawn), 'current_character_body'
         self.report = dict(handoffs=[], scope={})
         self.drive_module = importlib.import_module('BL4ThirdPersonPOC.vehicle_control')
         self.drive_owner = getattr(self.drive_module, '_owner', None)
@@ -365,8 +365,10 @@ class SummonFacing:
             and camera.CameraModeInputs.ViewTarget == pawn
             and str(camera.GetActorCameraMode(pawn)) == 'ThirdPerson')
         if allowed:
-            yaw = vector_yaw(pawn.GetLastMovementInputVector())
-            if yaw is not None: self.last_yaw = yaw
+            # Input is a requested direction, not the actual body orientation.
+            # Refresh even while idle or after an exit changed the actor yaw.
+            self.last_yaw = rot_yaw(pawn)
+            self.source = 'current_character_body'
             # Previous seat tickets have ended. Reset bounded records with both
             # the summon gate and boot gate closed; the native GameThread is ours.
             if not self.control[16] and not self.control[8]:

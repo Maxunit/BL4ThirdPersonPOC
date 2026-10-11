@@ -1,14 +1,17 @@
-# BL4ThirdPersonPOC 0.3.9.31 Summon Seat QA
+# BL4ThirdPersonPOC 0.3.9.32 Vehicle Facing QA
 
-Basiert auf 0.3.9.30. Beim Lichtschützen (Fahrzeug ohne sichtbare Figur) dreht
-Omni die Kamera hinter das gerufene Fahrzeug, wenn sie mehr als 90° von der
-Figurrichtung weg steht. Sonst würde sich das Fahrzeug selbst zur Kamera drehen.
-Alle Fahrzeuge mit sichtbarem Fahrer bleiben unverändert. Neue Zeile
-`[OmniVehicle] summon` pro Einstieg zeigt Erkennung, Kamera und Drehung.
+Basiert auf der Repo-.31, Commit `001a62a45d7f9307f1b91088e7b25bfba63d0941`.
+Beim Ausstieg gilt jetzt die Fahrzeugausrichtung bei jedem Tempo, einschließlich
+kurzer WASD-Tipps, Rückwärtsfahrt und Drift. Der Summon-Publisher verwendet die
+aktuelle Actor-Rotation der Figur statt ihrer letzten Bewegungseingabe.
+Der bestehende Native-Ausstiegsbericht enthält den tatsächlich angewandten Yaw.
+Die Lichtschützen-Kamera-Korrektur und die Performance-Arbeit der Repo-.31 sind
+enthalten. Spieltest der beiden verbleibenden Fehler erforderlich.
 
-- [Befund und Änderungen](docs/CHANGELOG_0.3.9.31_SUMMON_SEAT_QA.md)
-- [Testplan](docs/TESTPLAN_0.3.9.31_SUMMON_SEAT_QA.md)
-- [Lokale Validierung](docs/VALIDATION_0.3.9.31_SUMMON_SEAT_QA.md)
+- [Befund und Änderungen](docs/CHANGELOG_0.3.9.32_VEHICLE_FACING_QA.md)
+- [Kurzer Spieltest](docs/TESTPLAN_0.3.9.32_VEHICLE_FACING_QA.md)
+- [Lokale Validierung](docs/VALIDATION_0.3.9.32_VEHICLE_FACING_QA.md)
+- Vorgänger: [0.3.9.31 Summon Seat](docs/CHANGELOG_0.3.9.31_SUMMON_SEAT_QA.md)
 - Vorgänger: [0.3.9.30 Exit Facing](docs/CHANGELOG_0.3.9.30_VEHICLE_EXIT_FACING_QA.md),
   [0.3.9.29 Bind & Hitch](docs/CHANGELOG_0.3.9.29_OMNI_BIND_HITCH_QA.md),
   [0.3.9.28 Callback-Scope](docs/CHANGELOG_0.3.9.28_OMNI_CALLBACK_SCOPE_QA.md)
