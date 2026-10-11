@@ -1,5 +1,6 @@
 """Actual .36 loader, camera scope, setter, menu option and shutdown."""
 import json
+from contextlib import ExitStack
 from types import SimpleNamespace as S
 from unittest.mock import patch
 import loader_harness as h
@@ -34,16 +35,51 @@ def run():
     fn=S(NumParams=13,_properties=lambda:iter(props))
     lib=S(Class=S(_find=lambda name:fn),LineTraceSingle=lambda *args:(True,S(
           ImpactPoint=S(Z=898.),ImpactNormal=S(Z=1.),bBlockingHit=True,bStartPenetrating=False)))
+    from unrealsdk import hooks
+    producer=runtime_updates.Owner(mod)
+    producer.thread=h.THREAD_ID
+    widget=S(Class=S(),_get_address=lambda:777)
+    producer.widget_ref=lambda:widget
+    producer.widget_address=777
+    runtime_updates._owner=producer
+    d.start(mod)
+    spec=(runtime_updates.WIDGET_TICK,hooks.Type.PRE,'bl4tps.ground_slam_distance')
+    assert spec in h.HOOKS
+    mod._install_hooks()
+    anim_spec=(mod.FIRST_PERSON_ANIM_HOOK,hooks.Type.POST,mod.HOOK_IDENTIFIER)
+    assert anim_spec in h.HOOKS
+    anim=S(Class=S(Name='FixtureAnim'),bIsSliding=False)
     def frame():
-        d.pre_frame(mod,S(InDeltaTime=1/60))
-        mod._apply_camera_offset()
-        mod._slam_distance_pending=False
+        old=getattr(mod,'_ground_slam_distance_state',None)
+        old_amount=old.amount if old else None
+        # Other viewport widgets cannot advance the owned distance state.
+        h.HOOKS[spec](S(Class=S(),_get_address=lambda:778),S(InDeltaTime=1/60),None,None)
+        assert (old.amount if old else None)==old_amount
+        h.HOOKS[spec](widget,S(InDeltaTime=1/60),None,None)
+        state=mod._ground_slam_distance_state
+        amount=state.amount
+        # The separately registered original animation callback has DeltaTimeX,
+        # not the widget's InDeltaTime. It applies, but must not advance distance.
+        h.HOOKS[anim_spec](anim,S(DeltaTimeX=1/60),None,None)
+        assert state.amount==amount
         v=w.camera.CameraModeState.CameraLocationOffset
         raw=v.X,v.Y,v.Z
         v.X-=256.
         assert mod._camera_frame is None
         return raw
-    with patch.object(runtime_updates,'is_game_thread',return_value=True),patch.object(d,'find_object',return_value=lib):
+    with ExitStack() as stack:
+        from BL4ThirdPersonPOC import ffyl_strategy_runtime, ground_slam_camera, npc_camera_visibility
+        stack.enter_context(patch.object(runtime_updates,'is_game_thread',return_value=True))
+        stack.enter_context(patch.object(d,'find_object',return_value=lib))
+        for module in (ffyl_strategy_runtime,ground_slam_camera,npc_camera_visibility):
+            stack.enter_context(patch.object(module,'update',return_value=None))
+        for name in ('_update_native_ownership','_update_slide_state','_update_ladder_camera_state',
+                     '_update_vehicle_camera_state','_update_camera_lifecycle','_retry_pending_camera_pop',
+                     '_update_pending_ads_press','_update_hybrid_ads_route_reconciliation',
+                     '_update_hybrid_tps_ads','_update_pending_tps_reticle','_update_slide_camera_recovery',
+                     '_update_item_card_fusion','_update_pending_interaction_fallback',
+                     '_update_pending_floor_pickup_fallback'):
+            stack.enter_context(patch.object(mod,name,return_value=None))
         for _ in range(5):frame()
         assert mod._ground_slam_distance_state.shift==-256.
         w.movement.MovementMode=3;w.movement.Velocity.Z=-5000.;slam=True
@@ -61,6 +97,8 @@ def run():
         mod._third_person_pushed=False
         mod._on_disable()
         assert mod._ground_slam_distance_state is None
+        assert spec not in h.HOOKS
+        assert not producer.routes
     assert mod.ground_slam_distance_cm.value==150.
     assert mod._camera_feature_options['slam_distance'] is mod.ground_slam_distance_cm
     return dict(version=mod.MOD_VERSION,far=far,near=near,scope_cleared=True,default=150.,shutdown=True)

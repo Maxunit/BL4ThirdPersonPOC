@@ -1,7 +1,9 @@
-"""Ground-driven Slam distance on the existing camera update and setter.
+"""Ground-driven Slam distance on the owned widget PRE and camera setter.
 
 V4's validated entry/ground envelope and composed Exit handoff, without a
 probe wrapper, diagnostic sampling, new producer, timer or native patch.
+One subscription uses the V4-proven widget source; animation events only apply
+the current distance through their already existing scoped camera setter.
 """
 import ctypes
 import hashlib
@@ -9,6 +11,8 @@ from itertools import islice
 import math
 import struct
 import sys
+from time import perf_counter_ns
+from unrealsdk import hooks
 from unrealsdk import find_object, make_struct
 from unrealsdk.unreal import WeakPointer
 from . import runtime_updates, ground_slam_camera
@@ -305,10 +309,51 @@ def pre_frame(mod, args):
     if state is not None:
         pc = state.refs[0]()
         if pc is None or configured(mod) == 0. or not permitted(mod, pc):
-            shutdown(mod)
+            shutdown_state(mod)
     mod._slam_distance_pending = True
-    delta = getattr(args, 'InDeltaTime', 0.) if args is not None else 0.
+    tick = perf_counter_ns()
+    previous = getattr(mod, '_slam_distance_tick', None)
+    mod._slam_distance_tick = tick
+    delta = getattr(args, 'InDeltaTime', None) if args is not None else None
+    if delta is None:
+        delta = (tick - previous) / 1e9 if previous is not None else 0.
+        mod._slam_distance_delta_source = 'owned_callback_elapsed'
+    else:
+        mod._slam_distance_delta_source = 'widget_InDeltaTime'
     mod._slam_distance_delta = max(0., min(.1, finite(delta)))
+
+
+def step(mod, args):
+    """One PRE of the serial/thread-filtered owned widget, as validated in V4."""
+    if getattr(mod, '_slam_distance_stopping', False) or not runtime_updates.is_game_thread():
+        return
+    pre_frame(mod, args)
+    try:
+        pc, pawn, camera = mod._get_runtime()
+        if any(o is None for o in (pc, pawn, camera)):
+            shutdown_state(mod)
+            return
+        mode = str(camera.GetActorCameraMode(pawn))
+        if mode == 'ThirdPerson' and mod._looks_like_first_person_fallback():
+            mode = 'Default'
+        update(mod, pc, pawn, camera, mode)
+    finally:
+        mod._slam_distance_pending = False
+
+
+def start(mod):
+    if not shutdown(mod):
+        raise RuntimeError('Slam distance subscription cleanup incomplete')
+    mod._slam_distance_stopping = False
+    spec = (mod.FIRST_PERSON_ANIM_HOOK, hooks.Type.PRE, 'bl4tps.ground_slam_distance')
+    mod._slam_distance_spec = spec
+    try:
+        runtime_updates.add_hook(*spec, lambda obj, args, ret, func: step(mod, args))
+        if not runtime_updates.has_hook(*spec):
+            raise RuntimeError('Slam distance widget subscription unverified')
+    except Exception:
+        shutdown(mod)
+        raise
 
 
 def update(mod, pc, pawn, camera, mode):
@@ -317,7 +362,7 @@ def update(mod, pc, pawn, camera, mode):
     mod._slam_distance_pending = False
     state = getattr(mod, '_ground_slam_distance_state', None)
     if configured(mod) == 0. or mod.tps_ground_slam_beta.value is not True:
-        shutdown(mod)
+        shutdown_state(mod)
         return
     try:
         objects = (pc, pawn, camera, pawn.OakCharacterMovement)
@@ -338,13 +383,14 @@ def update(mod, pc, pawn, camera, mode):
 
 def compensate(mod, pc, pawn, camera, values):
     state = getattr(mod, '_ground_slam_distance_state', None)
+    frame = getattr(mod, '_camera_frame', None)
     if (state is None or state.fault or not runtime_updates.is_game_thread()
-            or getattr(mod, '_camera_frame', None) is None
+            or frame is None or frame.get('slam_distance_mode') != 'ThirdPerson'
             or not permitted(mod, pc) or state.mode != 'ThirdPerson'
             or (camera.CameraModeState.bIsTransitioning and not state.fallback)
             or not state.matches((pc, pawn, camera, pawn.OakCharacterMovement))):
         return values
-    # _camera_frame may be an empty scoped dict when Root height is off.
+    # A fresh mode proof in this setter scope also covers Root height off.
     baseline = values[0]
     wanted = baseline - state.amount
     state.last_raw = (baseline, wanted)
@@ -354,7 +400,7 @@ def compensate(mod, pc, pawn, camera, values):
     return wanted, values[1], values[2]
 
 
-def shutdown(mod):
+def shutdown_state(mod):
     state = getattr(mod, '_ground_slam_distance_state', None)
     if state is not None:
         if state.bridge is not None and not runtime_updates.is_game_thread():
@@ -366,3 +412,28 @@ def shutdown(mod):
     mod._ground_slam_distance_state = None
     mod._slam_distance_pending = False
     return True
+
+
+def shutdown(mod):
+    mod._slam_distance_stopping = True
+    if not shutdown_state(mod):
+        return False
+    spec = getattr(mod, '_slam_distance_spec', None)
+    if spec is not None:
+        runtime_updates.remove_hook(*spec)
+        if runtime_updates.has_hook(*spec):
+            return False
+        mod._slam_distance_spec = None
+    mod._slam_distance_tick = None
+    return True
+
+
+def snapshot(mod):
+    state = getattr(mod, '_ground_slam_distance_state', None)
+    return dict(configured_cm=configured(mod), subscribed=getattr(mod, '_slam_distance_spec', None) is not None,
+                delta_seconds=getattr(mod, '_slam_distance_delta', None),
+                delta_source=getattr(mod, '_slam_distance_delta_source', None),
+                status=state.status if state else 'waiting_for_runtime',
+                extra_cm=state.amount if state else 0.,
+                slam_active=state.active if state else False,
+                ground_channel=state.channel if state else None)

@@ -2824,6 +2824,7 @@ def _on_enable_impl(*, owner_module) -> None:
         )
         return
     runtime_updates.start(owner_module)
+    ground_slam_distance.start(owner_module)
     vehicle_camera.start(owner_module)
     if owner_module.vehicle_camera_relative_drive.value is True:
         vehicle_control.start(owner_module)

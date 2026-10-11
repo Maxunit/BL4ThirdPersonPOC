@@ -1381,8 +1381,9 @@ def _apply_camera_offset_impl(*, owner_module) -> None:
         except Exception as exc:
             mode = f"<query failed: {type(exc).__name__}>"
             fps_view = False
-        from . import ground_slam_distance
-        ground_slam_distance.update(owner_module, _pc, pawn, camera_manager, 'Default' if fps_view else mode)
+        frame = getattr(owner_module, '_camera_frame', None)
+        if frame is not None:
+            frame['slam_distance_mode'] = 'Default' if fps_view else mode
         if mode != "ThirdPerson" or fps_view:
             owner_module._dynamic_motion_reset()
             owner_module._reset_mantle_camera_state()

@@ -1,4 +1,23 @@
-# BL4ThirdPersonPOC 0.3.9.36 Ground Slam QA
+# BL4ThirdPersonPOC 0.3.9.37 Ground Slam Update QA
+
+Die .36 hatte die Distanzberechnung an den Animations-Callback gehängt,
+dabei aber das Widget-Argument `InDeltaTime` verwendet. Ohne dieses Argument
+blieb das Zeitdelta null und der Zusatzabstand baute sich nicht auf. .37
+verwendet wie die bestätigte V4-Probe den eigenen, thread-/widget-gefilterten
+Widget-PRE. Der Animations-Callback wendet die Distanz nur an, er berechnet
+sie nicht. Bei fehlendem Widget-Zeitargument wird der Abstand zwischen den
+eigenen Updates gemessen; ein explizites Delta von null bleibt eine Pause.
+
+Eine zusätzliche Subscription am vorhandenen Widget, kein neuer Producer,
+Timer oder nativer Patch. Shutdown entfernt sie vor dem Producer. Fremde
+Widgets verändern die Distanz nicht; ein zwischen Widget und Setter gewechselter
+Kameramodus bekommt keinen alten Zusatz. F10 loggt den aktuellen Distanzstatus.
+
+- [Spieltest](docs/TESTPLAN_0.3.9.37_GROUND_SLAM_UPDATE_QA.md)
+- [Änderungen](docs/CHANGELOG_0.3.9.37_GROUND_SLAM_UPDATE_QA.md)
+- [Validierung](docs/VALIDATION_0.3.9.37_GROUND_SLAM_UPDATE_QA.md)
+
+## Enthalten: Oberkörperkorrektur und 150-cm-Option aus .36
 
 Während des aktiven Ground Slams und GroundSlamExit übernimmt die native
 Oberkörperanimation: Omni lässt seine Aim-Yaw-/Pitch-Begrenzung aus; im
@@ -10,7 +29,7 @@ Die bestätigte V4-Distanzfunktion ist integriert: weich herauszoomen, oben
 halten, während der Bodenannäherung zurückfahren. Standard **150 cm**;
 **CAMERA → Ground Slam Extra Distance**, 0–250 cm, 0 schaltet den Zusatz aus.
 Der vorhandene TPS-Ground-Slam-Schalter steuert weiterhin die gesamte Funktion.
-Keine PyExec-Probe nötig, keine zusätzlichen Hooks, Timer oder nativen Patches.
+Keine PyExec-Probe nötig, keine zusätzlichen Timer oder nativen Patches.
 Die beiden Start-Traces kalibrieren am normalen Boden; danach läuft ein Trace
 pro aktivem Slam-Update. Im gewöhnlichen Stand und bei normalen Sprüngen gibt
 es keine fortlaufenden Boden-Traces.

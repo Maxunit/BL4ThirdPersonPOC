@@ -12,7 +12,7 @@ Native lifetime and handoff contracts are described in docs/NATIVE_LIFECYCLE.md.
 from __future__ import annotations
 
 # Available before build_mod invokes the automatic enable callback.
-MOD_VERSION = "0.3.9.36"
+MOD_VERSION = "0.3.9.37"
 HYBRID_ADS_AVAILABLE = True  # optional Hybrid diagnostics QA
 
 import builtins
@@ -3111,6 +3111,8 @@ from .ui_and_commands import _emit_gameplay_debug_state
     display_name="Dump Gameplay Debug State",
 )
 def dump_gameplay_debug_state() -> None:
+    from . import ground_slam_distance
+    logging.info(f'[BL4ThirdPersonPOC.SlamDistance] {ground_slam_distance.snapshot(sys.modules[__name__])}')
     from . import camera_height_capture
 
     if camera_height_capture.trigger(sys.modules[__name__]):
@@ -3218,7 +3220,7 @@ def _set_ground_slam_mode(value: bool) -> None:
     from . import ground_slam_camera, ground_slam_distance
 
     requested = value is True
-    if not requested and not ground_slam_distance.shutdown(sys.modules[__name__]):
+    if not requested and not ground_slam_distance.shutdown_state(sys.modules[__name__]):
         logging.error('[BL4ThirdPersonPOC] GROUND_SLAM_DISTANCE_DISABLE_REFUSED')
         return
     if not requested and not ground_slam_camera.shutdown("menu_disabled"):

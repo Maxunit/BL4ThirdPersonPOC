@@ -25,7 +25,8 @@ class DistanceTests(unittest.TestCase):
         self.mod.ground_slam_distance_cm=S(value=150.)
         self.mod.tps_ground_slam_beta=S(value=True)
         self.mod._camera_lifecycle=self.mod._mantle_camera_state={}
-        self.mod._camera_frame={}
+        self.mod._camera_frame=dict(slam_distance_mode='ThirdPerson')
+        self.mod._looks_like_first_person_fallback=lambda:False
         self.mode='ThirdPerson'
         self.w.camera.GetActorCameraMode=lambda pawn:self.mode
         self.slam=False
@@ -199,7 +200,7 @@ class DistanceTests(unittest.TestCase):
         from BL4ThirdPersonPOC import camera_math as cm
         state=self.far()
         self.mod.root_height_enabled=S(value=True)
-        self.mod._camera_frame=dict(height_refs=tuple(lambda o=o:o for o in
+        self.mod._camera_frame=dict(slam_distance_mode='ThirdPerson',height_refs=tuple(lambda o=o:o for o in
             (self.w.pc,self.w.pawn,self.w.camera,self.w.mesh)),height_local=(5.,11.,-44.))
         for _ in range(5):
             self.assertTrue(cm._set_camera_offset_impl(45.,55.,10.,owner_module=self.mod))
@@ -226,13 +227,52 @@ class DistanceTests(unittest.TestCase):
             self.assertEqual(state.amount,0.)
             self.assertFalse(state.fallback)
 
+    def test_missing_widget_delta_uses_measured_callback_elapsed_and_zero_delta_pauses(self):
+        self.ready();self.air()
+        ticks=iter(i*16_666_667 for i in range(55))
+        with patch.object(distance,'perf_counter_ns',side_effect=lambda:next(ticks)):
+            self.mod._slam_distance_tick=None
+            for _ in range(50):distance.step(self.mod,None)
+        state=self.mod._ground_slam_distance_state
+        self.assertEqual(state.amount,150.)
+        self.assertEqual(self.mod._slam_distance_delta_source,'owned_callback_elapsed')
+        state.entry=state.amount=50.
+        distance.step(self.mod,S(InDeltaTime=0.))
+        self.assertEqual(state.amount,50.)
+        self.assertEqual(self.mod._slam_distance_delta_source,'widget_InDeltaTime')
+
+    def test_setter_foreign_mode_between_widget_ticks_never_gets_stale_extra(self):
+        state=self.far()
+        before=len(state.history)
+        self.mod._camera_frame['slam_distance_mode']='GroundSlamExit'
+        values=distance.compensate(self.mod,self.w.pc,self.w.pawn,self.w.camera,(0.,0.,0.))
+        self.assertEqual(values,(0.,0.,0.))
+        self.assertEqual(len(state.history),before)
+        self.mod._camera_frame={}
+        self.assertEqual(distance.compensate(self.mod,self.w.pc,self.w.pawn,self.w.camera,(45.,55.,10.)),(45.,55.,10.))
+
+    def test_failed_subscription_removal_keeps_retry_spec_and_inerts_callback(self):
+        state=self.far()
+        spec=('widget',0,'owned_distance')
+        self.mod._slam_distance_spec=spec
+        with patch.object(distance.runtime_updates,'remove_hook',return_value=False),\
+             patch.object(distance.runtime_updates,'has_hook',return_value=True):
+            self.assertFalse(distance.shutdown(self.mod))
+        self.assertEqual(self.mod._slam_distance_spec,spec)
+        distance.step(self.mod,S(InDeltaTime=1/60))
+        self.assertIsNone(self.mod._ground_slam_distance_state)
+        with patch.object(distance.runtime_updates,'remove_hook',return_value=True),\
+             patch.object(distance.runtime_updates,'has_hook',return_value=False):
+            self.assertTrue(distance.shutdown(self.mod))
+        self.assertIsNone(self.mod._slam_distance_spec)
+
 
 class PoseAdmissionTests(unittest.TestCase):
     def test_real_loader_camera_scope_menu_default_and_shutdown(self):
         result=subprocess.run([sys.executable,str(Path(__file__).with_name('ground_slam_loader_scenario.py'))],
                               capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertEqual(json.loads(result.stdout),dict(version='0.3.9.36',far=[-105.,55.,10.],
+        self.assertEqual(json.loads(result.stdout),dict(version='0.3.9.37',far=[-105.,55.,10.],
                          near=[45.,55.,10.],scope_cleared=True,default=150.,shutdown=True))
 
     def test_real_frame_disables_stale_front_pose_in_air_and_exit_then_resumes(self):

@@ -1852,8 +1852,6 @@ def _camera_update_hook_impl(
     from . import ground_slam_camera
 
     ground_slam_camera.update(owner_module)
-    from . import ground_slam_distance
-    ground_slam_distance.pre_frame(owner_module, args)
     profile = owner_module._perf_probe
     profile_active = bool(profile["armed"])
     if profile_active:
@@ -1972,7 +1970,6 @@ def _camera_update_hook_impl(
                             if stage_ns > top[smallest][0]:
                                 top[smallest] = sample
 
-    owner_module._slam_distance_pending = False
     if profile_active:
         work_ns = owner_module.time.perf_counter_ns() - hook_started_ns
         owner_module._perf_record_metric("hook_work", work_ns)
