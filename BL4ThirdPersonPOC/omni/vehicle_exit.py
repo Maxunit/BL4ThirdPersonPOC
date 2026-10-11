@@ -14,12 +14,17 @@ import struct
 import sys
 from unrealsdk.unreal import WeakPointer
 from ..build_gate import REVIEWED_BUILD as EXPECTED_BUILD
+from . import hitch
 TARGET_RVA, BODY_RVA, BODY_SIZE = 0x12D8432, 0x12D723A, 0x14DB
 BODY_HASH = '682bc8073c49d612a1da0addfb87fb97ff07f0088fdfc0ecfd279520c0a755a2'
 ORIGINAL = bytes.fromhex('488b831017000066440f288c2420020000')
 CONTINUATION = bytes.fromhex('66440f168c2428020000')
 PC_TABLE, VEHICLE_TABLE, CHARACTER_TABLE, MOVEMENT_TABLE = 0xB98A160, 0xB8D0A80, 0xB6F4080, 0xB709670
 CAPACITY, RECORD_SIZE, MAX_SAMPLES = 64, 128, 2048
+# Below this horizontal speed (cm/s) a parked or settling vehicle has no travel
+# direction: summon drop, suspension and micro-roll give arbitrary or backward
+# velocity vectors. The exit then keeps the vehicle body yaw.
+MIN_TRAVEL_SPEED = 150.0
 SENTINEL = b'\x11' * 8
 PREFIX = bytes.fromhex('9c504152415349ba111111111111111149833a010f8578010000493b5a180f856e010000654c8b1c25480000004d3b5a100f855b010000498b42084c8b184d3b5a500f854a0100004c8b98a83900004939db0f853a0100004c8b98d00300004939db740a4d3b5a200f85240100004c8b1b4d3b5a580f85170100004c8b9b101700004d3b5a200f8506010000498b03493b42680f85f9000000498b8350680000493b42280f85e8000000493b83300400000f85db0000004c8b184d3b5a600f85ce0000004d8b5a404983fb400f83c000000049c1e3074d035a38498b420849894308498b421849894310498b422049894318498b422849894320488b84244002000049894328488b84244802000049894330488b84245002000049894338498b4230488984244802000049894340498b424849894348498b427049894350498b4208488b801004000049894358488b84242003000049894360488b84242803000049894368488b84243003000049894370498b4208488b80d00300004989437849c7030100000049ff424049c70200000000415b415a589d')
 PREFIX_HASH = '77205102eaa3dbb638cc18b29b6f0f845335df61df79fa912ff4eeef99a93d81'
@@ -382,16 +387,25 @@ class ExitFacing:
         # actual exit. SDK ownership is still checked on each publication.
         if pc.PersonalVehicleState.Vehicle != pawn or pc.Pawn != pawn or pawn.DriverPawn != self.pawn_ref():
             raise RuntimeError('Own vehicle possession/driver changed')
-        if not self.seated or self.vehicle_ref() != pawn:
+        seat_start = not self.seated or self.vehicle_ref() != pawn
+        if seat_start:
             self.sequence += 1
             self.vehicle_ref = WeakPointer(pawn)
-            self.last_yaw = float(components(pawn.K2_GetActorRotation(), ('Pitch', 'Yaw', 'Roll'))['Yaw'])
-            self.source = 'vehicle_body_no_motion_observed'
         velocity = components(pawn.GetVelocity(), ('X', 'Y', 'Z'))
-        # Numerical zero only: no gameplay deadzone, physical input or timeout.
-        if velocity['X'] != 0.0 or velocity['Y'] != 0.0:
+        speed = math.hypot(velocity['X'], velocity['Y'])
+        if speed >= MIN_TRAVEL_SPEED:
             self.last_yaw = math.degrees(math.atan2(velocity['Y'], velocity['X']))
-            self.source = 'latest_observed_vehicle_xy_velocity'
+            self.source = 'vehicle_travel_direction'
+        else:
+            # Parked, settling or creeping: the vehicle body, not velocity noise.
+            self.last_yaw = float(components(pawn.K2_GetActorRotation(), ('Pitch', 'Yaw', 'Roll'))['Yaw'])
+            self.source = 'vehicle_body_below_travel_speed'
+        self.last_speed = speed
+        if seat_start:
+            summon = getattr(self.owner, 'summon', None)
+            hitch.note('[OmniVehicle]', 'seated vehicle_yaw=' + hitch.value(lambda: self.last_yaw)
+                       + ' camera_yaw=' + hitch.value(lambda: pc.GetControlRotation().Yaw)
+                       + ' summon_target_yaw=' + ('-' if summon is None else hitch.value(lambda: summon.last_yaw)))
         self.seated = True
         self.control[3], self.control[6] = live(pawn)[1], yaw_bits(self.last_yaw)
         self.control[9], self.control[14] = self.frames, self.sequence
@@ -493,6 +507,15 @@ class ExitFacing:
             self.transition_validate()
             self.consumed = count
             self.owner.report['exit_rotations'] += 1
+            row = dict(applied_yaw=hitch.value(lambda: self.last_yaw),
+                       source=getattr(self, 'source', None),
+                       vehicle_speed=hitch.value(lambda: self.last_speed),
+                       character_yaw=hitch.value(lambda: character.K2_GetActorRotation().Yaw),
+                       camera_yaw=hitch.value(lambda: pc.GetControlRotation().Yaw))
+            exits = self.owner.report.setdefault('exit_facings', [])
+            exits.append(row)
+            del exits[:-16]
+            hitch.note('[OmniVehicle]', 'exit ' + ' '.join(k + '=' + str(v) for k, v in row.items()))
         if pawn == character:
             self.seated = False
             if self.gap_seat_open or previous_gap:

@@ -630,6 +630,10 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
         name = self.pending_bind_step()
         if name is None:
             self.staged_bind = False
+            hitch.note('[OmniBind]', 'ready steps=' + str(len(self.report.get('bind_steps', [])))
+                       + ' body_yaw=' + hitch.value(lambda: pawn.K2_GetActorRotation().Yaw)
+                       + ' camera_yaw=' + hitch.value(lambda: pc.GetControlRotation().Yaw)
+                       + ' impulse=' + str(self.impulse_index is not None))
             return False
         if self.classify_handoff(pc, pawn, camera, movement)[0] != 'RUN':
             return False

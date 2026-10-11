@@ -181,6 +181,8 @@ class ExitAir:
         self.air_child = child
         self.report['air_rebinds'] += 1
         self.event('AIR_REBOUND', sequence=self.sup.sequence, body_yaw=child.original_rotation['Yaw'])
+        hitch.note('[OmniVehicle]', 'air_rebind body_yaw=' + hitch.value(lambda: child.original_rotation['Yaw'])
+                   + ' camera_yaw=' + hitch.value(lambda: child.bound()[0].GetControlRotation().Yaw))
         self.cancel('CONSUMED_BY_AIR_REBIND')
 
     def __init__(self, owner):

@@ -13,6 +13,7 @@ import struct
 import sys
 from unrealsdk.unreal import WeakPointer
 from ..build_gate import REVIEWED_BUILD as EXPECTED_BUILD
+from . import hitch
 GETTER_RVA, CALL_RVA, RETURN_RVA = 0x48EC174, 0xA9ACD9, 0xA9ACDF
 SETTER_RVA, POSSESSION_RVA, POSSESSION_RETURN_RVA = 0x210A52, 0x5956AAA, 0x5956D16
 TABLE_RVA, VEHICLE_TABLE_RVA = 0xB98A160, 0xB8D0A80
@@ -306,6 +307,7 @@ class SummonFacing:
         self.chain = importlib.import_module('BL4ThirdPersonPOC.camera_hook_chain')
         self.active = False
         self.seat_vehicle = None
+        self.seat = None
         self.layout_cache = []
         self.validate_initial(pc, pawn)
         self.control[1:4] = [self.pc_address, int(self.producer.thread), self.base + RETURN_RVA]
@@ -342,17 +344,19 @@ class SummonFacing:
         self.frames += 1
         if pc != self.pc_ref() or self.pawn_ref() is None:
             raise RuntimeError('Summon local owner expired')
-        if str(pawn.Class.Name) == 'OakVehicle':
+        in_vehicle = str(pawn.Class.Name) == 'OakVehicle'
+        if in_vehicle:
             if self.seat_vehicle is None or self.seat_vehicle() != pawn:
                 self.validate_static()
                 self.seat_vehicle = WeakPointer(pawn)
         elif self.seat_vehicle is not None:
             self.validate_static()
             self.seat_vehicle = None
+        on_foot = pawn == self.pawn_ref()
+        self.seat_frame(pc, pawn, on_foot)
         # Native per-call proofs remain. Full image/patch proofs are transition work.
         if self.control[16]:
             self.transition_handoff(pc, pawn, camera)
-        on_foot = pawn == self.pawn_ref()
         child = self.owner.sup.child
         allowed = (on_foot and self.owner.normal(pc) and self.mod._third_person_pushed
             and child is not None and child.active and not getattr(child, 'special_paused', False)
@@ -376,7 +380,48 @@ class SummonFacing:
             self.control[19] = 0
             self.boot_consumed = 0
 
+    def seat_frame(self, pc, pawn, on_foot):
+        """Bounded summon-seat window (QA timeline, hidden-character camera alignment).
+
+        Opens for any non-character pawn that is the owned vehicle or follows a
+        recent summon ticket, independent of the vehicle class name. Runs before
+        the summon gate is republished. Never raises: a failing read closes the
+        window. On foot without an open window it costs nothing.
+        """
+        seat = getattr(self, 'seat', None)
+        if seat is None and on_foot:
+            return
+        character = self.pawn_ref()
+        try:
+            if on_foot:
+                vehicle = None
+            elif seat is not None and seat.ref() == pawn:
+                vehicle = pawn
+            else:
+                from .summon_seat import summon_ticket
+                owned = pc.PersonalVehicleState.Vehicle == pawn
+                vehicle = pawn if owned or summon_ticket(self) is not None else None
+            if seat is not None and (vehicle is None or seat.ref() != vehicle):
+                seat.finish('left_vehicle' if vehicle is None else 'other_vehicle')
+                self.seat = seat = None
+            if vehicle is None:
+                return
+            if seat is None:
+                from .summon_seat import SummonSeat
+                self.seat = seat = SummonSeat(self, vehicle)
+                seat.row['owned'] = hitch.text(lambda: int(pc.PersonalVehicleState.Vehicle == vehicle))
+            if not seat.done:
+                seat.step(pc, vehicle, character)
+        except Exception as exc:
+            if seat is not None:
+                seat.row['error'] = hitch.text(lambda: repr(exc), 160)
+                seat.finish('error')
+
     def stop(self):
+        seat = getattr(self, 'seat', None)
+        if seat is not None:
+            seat.finish('stopped')
+            self.seat = None
         self.disarm()
         self.control[9], self.active = 0, False
         for name in ('getter', 'possession'):

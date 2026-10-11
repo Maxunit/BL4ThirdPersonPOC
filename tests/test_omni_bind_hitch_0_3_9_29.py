@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 
 import support
 import BL4ThirdPersonPOC.omni.grenade_facing as gf
+import BL4ThirdPersonPOC.omni.vehicle_exit as vx
 from BL4ThirdPersonPOC.omni import hitch
 from BL4ThirdPersonPOC.omni.rebind_cache import RebindCache
 from BL4ThirdPersonPOC.omni.session import GameplaySession
@@ -299,6 +300,62 @@ class GrenadeClassTests(unittest.TestCase):
             calls = cls._path_name.call_count
             self.assertEqual(facing.scripts(pawn), [mine])
         self.assertEqual(cls._path_name.call_count, calls)
+
+
+class ExitFacingTests(unittest.TestCase):
+    """0.3.9.29.1: a parked/settling vehicle keeps its body yaw on exit."""
+
+    def facing(self):
+        exit_ = vx.ExitFacing.__new__(vx.ExitFacing)
+        exit_.seated, exit_.vehicle_ref, exit_.sequence, exit_.frames = False, None, 0, 0
+        exit_.owner = S(summon=None)
+        exit_.mod = S(_ads_active=False)
+        exit_.pawn_ref = lambda: 'character'
+        exit_.control = [0] * 24
+        return exit_
+
+    def publish(self, exit_, velocity, body_yaw=90.):
+        vehicle = getattr(exit_, 'test_vehicle', None)
+        if vehicle is None:
+            vehicle = exit_.test_vehicle = S(Class=S(), _get_address=lambda: 0x700000, DriverPawn='character')
+        vehicle.K2_GetActorRotation = lambda: S(Pitch=0., Yaw=body_yaw, Roll=0.)
+        vehicle.GetVelocity = lambda: S(X=velocity[0], Y=velocity[1], Z=0.)
+        pc = S(PersonalVehicleState=S(Vehicle=vehicle), Pawn=vehicle, bShowMouseCursor=False,
+               GetControlRotation=lambda: S(Yaw=0.))
+        camera = S(CameraModeState=S(bIsTransitioning=False), CameraModeInputs=S(ViewTarget=vehicle))
+        exit_.publish_vehicle(pc, vehicle, camera)
+        return exit_
+
+    def test_settling_vehicle_keeps_body_yaw(self):
+        for velocity in ((-3., 0.), (0., -40.), (1e-4, 1e-4), (0., 0.)):
+            with self.subTest(velocity=velocity):
+                exit_ = self.publish(self.facing(), velocity)
+                self.assertEqual(exit_.last_yaw, 90.)
+                self.assertEqual(exit_.source, 'vehicle_body_below_travel_speed')
+
+    def test_driving_uses_travel_direction(self):
+        exit_ = self.publish(self.facing(), (0., 600.), body_yaw=75.)
+        self.assertAlmostEqual(exit_.last_yaw, 90.)
+        self.assertEqual(exit_.source, 'vehicle_travel_direction')
+        exit_ = self.publish(self.facing(), (-400., 0.), body_yaw=0.)
+        self.assertAlmostEqual(abs(exit_.last_yaw), 180.)
+
+    def test_stopping_after_driving_returns_to_body_yaw(self):
+        exit_ = self.publish(self.facing(), (600., 0.), body_yaw=10.)
+        self.assertAlmostEqual(exit_.last_yaw, 0.)
+        exit_ = self.publish(exit_, (20., 0.), body_yaw=10.)
+        self.assertEqual(exit_.last_yaw, 10.)
+
+    def test_seat_start_writes_one_trace_line(self):
+        with patch.object(hitch, 'note') as note:
+            exit_ = self.publish(self.facing(), (0., 0.))
+            self.publish(exit_, (0., 0.))
+        note.assert_called_once()
+        self.assertIn('seated vehicle_yaw=90', note.call_args[0][1])
+
+    def test_trace_value_never_raises(self):
+        self.assertEqual(hitch.value(lambda: 1 / 0), '?')
+        self.assertEqual(hitch.value(lambda: 12.6), '13')
 
 
 if __name__ == '__main__':

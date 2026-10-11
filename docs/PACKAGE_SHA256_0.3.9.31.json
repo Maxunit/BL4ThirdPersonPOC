@@ -1,0 +1,24 @@
+{
+  "version": "0.3.9.31",
+  "base": "0.3.9.30",
+  "tests": {
+    "total": 479,
+    "passed": 477,
+    "skipped": 2
+  },
+  "sdkmod_sha256": "9cf70b409bdc88d4d3185a61b7bcc8e9ca12eb98aaeba4fa260b4434176c4589",
+  "sdkmod_source_byte_match": true,
+  "added": [
+    "BL4ThirdPersonPOC/omni/summon_seat.py",
+    "tests/test_summon_seat_0_3_9_31.py"
+  ],
+  "production_changes": [
+    "BL4ThirdPersonPOC/__init__.py",
+    "BL4ThirdPersonPOC/omni/hitch.py",
+    "BL4ThirdPersonPOC/omni/summon_seat.py",
+    "BL4ThirdPersonPOC/omni/vehicle_summon.py"
+  ],
+  "native_modules_changed": [],
+  "native_templates_changed": [],
+  "in_game_validation": "pending"
+}

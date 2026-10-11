@@ -1,15 +1,17 @@
-# BL4ThirdPersonPOC 0.3.9.29 Omni Bind & Hitch QA (Claude)
+# BL4ThirdPersonPOC 0.3.9.31 Summon Seat QA
 
-Basiert auf 0.3.9.28. Neu: ein Ruckler-Logger für Omnis eigene Callbacks
-(`[OmniHitch]` in der Konsole), gestaffeltes Binden einer Session über mehrere
-Updates statt in einem langen Frame, günstigeres Neu-Binden (Knochen, Schema,
-Tastenscan) und ein schlankerer Laufen-Pfad (Kampf-Auswertung und Handler-Prüfung
-einmal pro Update, Granaten-Scan ohne Pfadnamen).
+Basiert auf 0.3.9.30. Beim Lichtschützen (Fahrzeug ohne sichtbare Figur) dreht
+Omni die Kamera hinter das gerufene Fahrzeug, wenn sie mehr als 90° von der
+Figurrichtung weg steht. Sonst würde sich das Fahrzeug selbst zur Kamera drehen.
+Alle Fahrzeuge mit sichtbarem Fahrer bleiben unverändert. Neue Zeile
+`[OmniVehicle] summon` pro Einstieg zeigt Erkennung, Kamera und Drehung.
 
-- [Befund und Änderungen](docs/CHANGELOG_0.3.9.29_OMNI_BIND_HITCH_QA.md)
-- [Testplan: Ruckler zuordnen, Laufen messen](docs/TESTPLAN_0.3.9.29_OMNI_BIND_HITCH_QA.md)
-- [Lokale Validierung](docs/VALIDATION_0.3.9.29_OMNI_BIND_HITCH_QA.md)
-- Vorgänger: [0.3.9.28 Callback-Scope](docs/CHANGELOG_0.3.9.28_OMNI_CALLBACK_SCOPE_QA.md)
+- [Befund und Änderungen](docs/CHANGELOG_0.3.9.31_SUMMON_SEAT_QA.md)
+- [Testplan](docs/TESTPLAN_0.3.9.31_SUMMON_SEAT_QA.md)
+- [Lokale Validierung](docs/VALIDATION_0.3.9.31_SUMMON_SEAT_QA.md)
+- Vorgänger: [0.3.9.30 Exit Facing](docs/CHANGELOG_0.3.9.30_VEHICLE_EXIT_FACING_QA.md),
+  [0.3.9.29 Bind & Hitch](docs/CHANGELOG_0.3.9.29_OMNI_BIND_HITCH_QA.md),
+  [0.3.9.28 Callback-Scope](docs/CHANGELOG_0.3.9.28_OMNI_CALLBACK_SCOPE_QA.md)
 - Zähl-Umgebung: `python tests/omni_idle_cost_scenario.py stand|crouch|move|turn --report`
 
 Installierbar: `dist/BL4ThirdPersonPOC.sdkmod`; gleichwertiger Quellordner:

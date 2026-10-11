@@ -27,7 +27,9 @@ THRESHOLD_MS = 4.0
 MAX_CONSOLE = 32
 MAX_STEPS = 6
 RECENT = deque(maxlen=64)
-_state: dict[str, Any] = dict(current=None, printed=0, total=0, worst_ms=0.0)
+_state: dict[str, Any] = dict(current=None, printed=0, total=0, worst_ms=0.0, notes=0)
+MAX_NOTES = 48
+NOTES = deque(maxlen=48)
 
 
 def root(label: str) -> Callable:
@@ -82,7 +84,37 @@ def _record(label: str, elapsed: int, steps: list) -> None:
         pass
 
 
+def value(read: Callable, fmt: str = '.0f') -> str:
+    """Format one diagnostic read; a failing read never reaches gameplay."""
+    try:
+        return format(float(read()), fmt)
+    except Exception:
+        return '?'
+
+
+def text(read: Callable, limit: int = 80) -> str:
+    """Short diagnostic string; a failing read never reaches gameplay."""
+    try:
+        value = str(read())
+    except Exception:
+        return '?'
+    value = value.replace(' ', '_') or '-'
+    return value if len(value) <= limit else value[:limit - 1] + '~'
+
+
+def note(tag: str, message: str) -> None:
+    """Bounded QA line for rare transitions (vehicle seat/exit, bind ready)."""
+    NOTES.append(dict(t=round(monotonic(), 3), tag=tag, message=message))
+    if _state['notes'] >= MAX_NOTES:
+        return
+    _state['notes'] += 1
+    try:
+        _sdk_logging.info(tag + ' ' + message)
+    except Exception:
+        pass
+
+
 def snapshot() -> dict[str, Any]:
     """Primitive copy for reports."""
     return dict(threshold_ms=THRESHOLD_MS, total=_state['total'], worst_ms=round(_state['worst_ms'], 2),
-                console_lines=_state['printed'], recent=list(RECENT))
+                console_lines=_state['printed'], recent=list(RECENT), notes=list(NOTES))
