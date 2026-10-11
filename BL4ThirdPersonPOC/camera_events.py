@@ -19,7 +19,7 @@ from . import ads_zoom_modifiers
 from . import hybrid_ads
 from . import tps_recovery
 from unrealsdk import logging
-from unrealsdk.hooks import Type, add_hook, remove_hook
+from unrealsdk.hooks import Type, add_hook, has_hook, remove_hook
 
 
 # Camera stack ownership and lifecycle state; loader remains the owner.
@@ -527,6 +527,12 @@ def _client_restart_post_hook_impl(
 
 
 def _install_camera_lifecycle_hook_impl(*, owner_module) -> None:
+    """Verify SDK registration, including false returns after collection append.
+
+    Some SDK versions append a new identifier to an existing function/type
+    collection and then return False. has_hook is the registration proof.
+    Keep cleanup tracked if either stable mod-owned identifier survives.
+    """
     if owner_module._camera_lifecycle_hook_installed:
         owner_module._remove_camera_lifecycle_hook()
     if owner_module._camera_lifecycle_hook_installed:
@@ -552,23 +558,45 @@ def _install_camera_lifecycle_hook_impl(*, owner_module) -> None:
     except Exception:
         pass
     try:
+        if has_hook(
+            owner_module.CLIENT_RESTART_FUNCTION,
+            Type.PRE,
+            owner_module.CLIENT_RESTART_PRE_IDENTIFIER,
+        ) or has_hook(
+            owner_module.CLIENT_RESTART_FUNCTION,
+            Type.POST,
+            owner_module.CLIENT_RESTART_IDENTIFIER,
+        ):
+            raise RuntimeError("Existing ClientRestart hook removal unverified")
         pre_installed = add_hook(
             owner_module.CLIENT_RESTART_FUNCTION,
             Type.PRE,
             owner_module.CLIENT_RESTART_PRE_IDENTIFIER,
             owner_module._client_restart_pre_hook,
         )
-        if not pre_installed:
-            raise RuntimeError("ClientRestart PRE hook refused")
+        if not has_hook(
+            owner_module.CLIENT_RESTART_FUNCTION,
+            Type.PRE,
+            owner_module.CLIENT_RESTART_PRE_IDENTIFIER,
+        ):
+            raise RuntimeError("ClientRestart PRE hook registration unverified")
         post_installed = add_hook(
             owner_module.CLIENT_RESTART_FUNCTION,
             Type.POST,
             owner_module.CLIENT_RESTART_IDENTIFIER,
             owner_module._client_restart_post_hook,
         )
-        if not post_installed:
-            raise RuntimeError("ClientRestart POST hook refused")
+        if not has_hook(
+            owner_module.CLIENT_RESTART_FUNCTION,
+            Type.POST,
+            owner_module.CLIENT_RESTART_IDENTIFIER,
+        ):
+            raise RuntimeError("ClientRestart POST hook registration unverified")
         owner_module._camera_lifecycle_hook_installed = True
+        logging.info(
+            "[BL4ThirdPersonPOC] CLIENT_RESTART_HOOKS_VERIFIED pre=True post=True "
+            f"pre_return={pre_installed!r} post_return={post_installed!r}"
+        )
     except Exception as exc:
         owner_module._camera_lifecycle_hook_installed = False
         try:
@@ -587,9 +615,22 @@ def _install_camera_lifecycle_hook_impl(*, owner_module) -> None:
             )
         except Exception:
             pass
+        try:
+            owner_module._camera_lifecycle_hook_installed = has_hook(
+                owner_module.CLIENT_RESTART_FUNCTION,
+                Type.PRE,
+                owner_module.CLIENT_RESTART_PRE_IDENTIFIER,
+            ) or has_hook(
+                owner_module.CLIENT_RESTART_FUNCTION,
+                Type.POST,
+                owner_module.CLIENT_RESTART_IDENTIFIER,
+            )
+        except Exception:
+            owner_module._camera_lifecycle_hook_installed = True
         logging.error(
             "[BL4ThirdPersonPOC] Could not install ClientRestart "
-            f"lifecycle hook: {type(exc).__name__}: {exc}"
+            f"lifecycle hook: {type(exc).__name__}: {exc}; "
+            f"cleanup_pending={owner_module._camera_lifecycle_hook_installed}"
         )
 
 
@@ -607,6 +648,16 @@ def _remove_camera_lifecycle_hook_impl(*, owner_module) -> None:
             Type.POST,
             owner_module.CLIENT_RESTART_IDENTIFIER,
         )
+        if has_hook(
+            owner_module.CLIENT_RESTART_FUNCTION,
+            Type.PRE,
+            owner_module.CLIENT_RESTART_PRE_IDENTIFIER,
+        ) or has_hook(
+            owner_module.CLIENT_RESTART_FUNCTION,
+            Type.POST,
+            owner_module.CLIENT_RESTART_IDENTIFIER,
+        ):
+            raise RuntimeError("ClientRestart hook removal unverified")
     except Exception as exc:
         logging.warning(
             "[BL4ThirdPersonPOC] Could not remove ClientRestart "
@@ -1416,183 +1467,6 @@ def _update_vehicle_camera_state_impl(*, owner_module) -> None:
             owner_module._set_camera_offset(0.0, 0.0, 0.0)
 
 
-# Physical ADS press preparation and its native ownership handoff.
-
-
-def _reset_ads_press_intent_impl(*, owner_module) -> None:
-    owner_module._ads_press_intent = {
-        "pending": False,
-        "pawn_address": 0,
-        "manager_address": 0,
-        "weapon_address": 0,
-        "prepared_category": "",
-        "prepared_source": "",
-        "prepared_evidence": "",
-        "prepared_collector_address": 0,
-        "deferred": False,
-        "presses": 0,
-        "confirmed": 0,
-        "deferred_presses": 0,
-        "deferred_resolved": 0,
-        "deferred_cancelled": 0,
-        "throwable_bypasses": 0,
-        "release_bypasses": 0,
-        "invalidations": 0,
-        "weak_signal_seen": False,
-        "weak_signal_rejections": 0,
-        "equip_gaps": 0,
-        "equip_rebinds": 0,
-        "errors": 0,
-        "last_reason": "",
-        "last_error": "",
-    }
-
-
-def _clear_pending_ads_press_impl(
-    reason: str, *, outcome: str = "invalid", owner_module
-) -> bool:
-    state = owner_module._ads_press_intent
-    if not state.get("pending"):
-        return False
-    was_deferred = bool(state.get("deferred"))
-    state["pending"] = False
-    state["pawn_address"] = 0
-    state["manager_address"] = 0
-    state["weapon_address"] = 0
-    state["prepared_category"] = ""
-    state["prepared_source"] = ""
-    state["prepared_evidence"] = ""
-    state["prepared_collector_address"] = 0
-    state["deferred"] = False
-    state["weak_signal_seen"] = False
-    state["last_reason"] = reason
-    if was_deferred and outcome != "confirmed":
-        state["deferred_cancelled"] += 1
-        logging.info(
-            "[BL4ThirdPersonPOC] ADS_PRESS_DEFERRED_CANCELLED "
-            f"reason={reason!r}, outcome={outcome!r}"
-        )
-    if outcome == "throwable":
-        state["throwable_bypasses"] += 1
-    elif outcome == "release":
-        state["release_bypasses"] += 1
-    elif outcome != "confirmed":
-        state["invalidations"] += 1
-    logging.info(
-        "[BL4ThirdPersonPOC] ADS_PRESS_INTENT_CLEARED "
-        f"reason={reason!r}, outcome={outcome!r}"
-    )
-    return True
-
-
-def _note_weak_zoom_signal_impl(pawn: Any, source: str, *, owner_module) -> None:
-    state = owner_module._ads_press_intent
-    if state.get("weak_signal_seen"):
-        return
-    zoom = pawn.ZoomState
-    if not (
-        int(zoom.State) == 0
-        and bool(zoom.bWantsToZoom)
-        and not bool(zoom.bPendingZoom)
-        and not bool(zoom.bTickingZoom)
-    ):
-        return
-    state["weak_signal_seen"] = True
-    state["weak_signal_rejections"] += 1
-    logging.info(
-        "[BL4ThirdPersonPOC] ADS_PRESS_WEAK_WANTS_REJECTED "
-        f"source={source!r}, weapon="
-        f"0x{int(state.get('weapon_address', 0)):016X}"
-    )
-
-
-def _prepare_pending_ads_press_impl(
-    weapon: Any,
-    *,
-    collector_address: int = 0,
-    owner_module,
-) -> None:
-    state = owner_module._ads_press_intent
-    category, source, evidence = owner_module._classify_ads_weapon(weapon)
-    state["prepared_category"] = category
-    state["prepared_source"] = source
-    state["prepared_evidence"] = evidence
-    if (
-        category != "sniper_rifle" or hybrid_ads.sniper_uses_tps(owner_module)
-    ) and len(owner_module._ads_hooks_installed) == 6:
-        collector = owner_module._find_ads_collector(weapon)
-        discovered_collector_address = owner_module._ads_object_address(collector)
-        resolved_collector_address = int(collector_address)
-        if (
-            resolved_collector_address
-            and discovered_collector_address
-            and resolved_collector_address != discovered_collector_address
-        ):
-            raise RuntimeError("Deferred ADS collector does not match current weapon")
-        if not resolved_collector_address:
-            resolved_collector_address = discovered_collector_address
-        if not resolved_collector_address:
-            raise RuntimeError("Prepared ADS collector address is zero")
-        state["prepared_collector_address"] = resolved_collector_address
-    logging.info(
-        "[BL4ThirdPersonPOC] ADS_PRESS_INTENT_PREPARED "
-        f"category={category!r}, source={source!r}, "
-        f"collector=0x{state['prepared_collector_address']:016X}"
-    )
-
-
-def _arm_pending_ads_press_impl(
-    pawn: Any, camera_manager: Any, *, owner_module
-) -> None:
-    # Hold only the exact verified FireBeam pair; all other owners are restored
-    # while the old TPS camera copy is still available.
-    if (
-        owner_module._beam_active()
-        and not owner_module._ads_beam_can_hold(camera_manager, pawn)
-        and not owner_module._native_stop_beam("ads_press")
-    ):
-        raise RuntimeError("Beam restore failed at ADS press; restart game")
-    state = owner_module._ads_press_intent
-    if state.get("pending"):
-        owner_module._clear_pending_ads_press("superseded_press")
-    state["pending"] = True
-    state["pawn_address"] = owner_module._object_address(pawn)
-    state["manager_address"] = owner_module._object_address(camera_manager)
-    state["weapon_address"] = owner_module._ads_object_address(
-        camera_manager.CameraModeInputs.Weapon
-    )
-    state["prepared_category"] = ""
-    state["prepared_source"] = ""
-    state["prepared_evidence"] = ""
-    state["prepared_collector_address"] = 0
-    state["deferred"] = not bool(state["weapon_address"])
-    state["weak_signal_seen"] = False
-    state["presses"] += 1
-    logging.info(
-        "[BL4ThirdPersonPOC] ADS_PRESS_INTENT_ARMED "
-        f"pawn=0x{state['pawn_address']:016X}, "
-        f"manager=0x{state['manager_address']:016X}, "
-        f"weapon=0x{state['weapon_address']:016X}"
-    )
-    if state["deferred"]:
-        state["deferred_presses"] += 1
-        logging.info(
-            "[BL4ThirdPersonPOC] ADS_PRESS_DEFERRED "
-            "reason='weapon_unavailable', awaiting='native_zoom_or_release'"
-        )
-        return
-    try:
-        weapon = camera_manager.CameraModeInputs.Weapon
-        owner_module._prepare_pending_ads_press(weapon)
-    except Exception as exc:
-        state["errors"] += 1
-        state["last_error"] = f"prepare: {type(exc).__name__}: {exc}"
-        owner_module._ads_debug_error("press_prepare", exc)
-
-
-# Confirmed ADS routing and physical input; keybinds stay in the loader.
-
-
 def _ffyl_camera_active_impl(pawn: Any, camera_manager: Any, *, owner_module) -> bool:
     """Include the serial-bound simple FFYL owner even in ThirdPerson mode."""
     from . import ffyl_strategy_runtime
@@ -1613,389 +1487,6 @@ def _ffyl_camera_active_impl(pawn: Any, camera_manager: Any, *, owner_module) ->
             )
             return True
         return False
-
-
-def _activate_confirmed_ads_press_impl(
-    pawn: Any,
-    camera_manager: Any,
-    confirmation: str,
-    *,
-    owner_module,
-) -> None:
-
-    if owner_module._ffyl_camera_active(pawn, camera_manager):
-        owner_module._clear_pending_ads_press("ffyl_camera", outcome="invalid")
-        logging.info(
-            "[BL4ThirdPersonPOC] FFYL_ADS_BLOCKED stage='confirmation' "
-            f"source={confirmation!r}"
-        )
-        return
-
-    prepared_category = str(owner_module._ads_press_intent.get("prepared_category", ""))
-    prepared_source = str(owner_module._ads_press_intent.get("prepared_source", ""))
-    prepared_evidence = str(owner_module._ads_press_intent.get("prepared_evidence", ""))
-    prepared_collector_address = int(
-        owner_module._ads_press_intent.get("prepared_collector_address", 0)
-    )
-    owner_module._clear_pending_ads_press(confirmation, outcome="confirmed")
-    owner_module._ads_press_intent["confirmed"] += 1
-    owner_module._ads_handoff["held"] = True
-
-    if owner_module._ads_route == "tps" and not owner_module._ads_active:
-        try:
-            owner_module._ads_active = True
-            owner_module._reverse_hybrid_tps_ads()
-            owner_module._request_tps_reticle_publish("ads_reversal")
-            owner_module._apply_camera_offset()
-        except Exception as exc:
-            owner_module._ads_debug_error("tps_reverse", exc)
-            owner_module._cancel_hybrid_ads("reverse_failure")
-        return
-
-    if owner_module._ads_active or owner_module._ads_route != "hip":
-        owner_module._ads_debug["ignored_events"] += 1
-        return
-
-    if prepared_category:
-        category = prepared_category
-        source = prepared_source
-        evidence = prepared_evidence
-    else:
-        try:
-            category, source, evidence = owner_module._classify_ads_weapon(
-                camera_manager.CameraModeInputs.Weapon
-            )
-        except Exception as exc:
-            owner_module._ads_debug_error("weapon_classification", exc)
-            category = "unknown"
-            source = "classification_error"
-            evidence = f"{type(exc).__name__}: {exc}"
-
-    if (
-        category != "sniper_rifle" or hybrid_ads.sniper_uses_tps(owner_module)
-    ) and len(owner_module._ads_hooks_installed) == 6:
-        try:
-            owner_module._start_hybrid_tps_ads(
-                camera_manager,
-                category,
-                source,
-                evidence,
-                prepared_collector_address,
-            )
-            owner_module._ads_active = True
-            owner_module._request_tps_reticle_publish("confirmed_ads_entry")
-            owner_module._apply_camera_offset()
-            return
-        except Exception as exc:
-            owner_module._ads_debug_error("tps_start", exc)
-            owner_module._cancel_hybrid_ads("tps_start_fallback")
-            logging.warning(
-                "[BL4ThirdPersonPOC] TPS ADS setup failed; "
-                "falling back to native First-Person ADS"
-            )
-    elif category != "sniper_rifle" or hybrid_ads.sniper_uses_tps(owner_module):
-        logging.warning(
-            "[BL4ThirdPersonPOC] Hybrid ADS hooks are incomplete; "
-            "falling back to native First-Person ADS"
-        )
-
-    # FPS ADS switches the camera definition. Restore its TPS Look copy
-    # before SetActorCameraMode replaces it (TPS ADS keeps the same copy).
-    if (
-        owner_module._native_active()
-        or owner_module._active_native_state.get("ladder_default")
-    ) and not owner_module._native_stop("fps_ads_start"):
-        raise RuntimeError("Recoil restore failed before FPS ADS; restart game")
-    owner_module._ads_active = True
-    owner_module._ads_route = (
-        "sniper_fps" if category == "sniper_rifle" else "fallback_fps"
-    )
-    owner_module._ads_handoff["route_weapon"] = owner_module._ads_object_address(
-        camera_manager.CameraModeInputs.Weapon
-    )
-    if category == "sniper_rifle":
-        owner_module._ads_debug["sniper_presses"] += 1
-    else:
-        owner_module._ads_debug["fallback_presses"] += 1
-
-    # Native First-Person ADS keeps the established camera route for sniper
-    # rifles and as a fail-safe for unsupported weapon layouts.
-    owner_module._set_camera_offset(0.0, 0.0, 0.0)
-
-    try:
-        camera_manager.SetActorCameraMode(
-            pawn,
-            "Default",
-            "",
-            owner_module.ADS_CAMERA_TRANSITION_TIME,
-            False,
-            True,
-        )
-        logging.info(
-            "[BL4ThirdPersonPOC] HYBRID_ADS_ROUTE "
-            f"category={category!r}, route={owner_module._ads_route!r}, "
-            f"source={source!r}, evidence={evidence}, "
-            f"confirmation={confirmation!r}"
-        )
-    except Exception as exc:
-        owner_module._ads_debug_error("native_fps_enter", exc)
-
-
-def _reconcile_pending_ads_press_weapon_impl(
-    pawn: Any,
-    camera_manager: Any,
-    source: str,
-    *,
-    collector_address: int = 0,
-    owner_module,
-) -> bool:
-    """Carry an unconfirmed physical press across an observed equip change."""
-    state = owner_module._ads_press_intent
-    if not state.get("pending"):
-        return False
-    if owner_module._object_address(pawn) != int(
-        state.get("pawn_address", 0)
-    ) or owner_module._object_address(camera_manager) != int(
-        state.get("manager_address", 0)
-    ):
-        return False
-
-    weapon = camera_manager.CameraModeInputs.Weapon
-    incoming = owner_module._ads_object_address(weapon)
-    expected = int(state.get("weapon_address", 0))
-    if incoming and incoming == expected and not state.get("deferred"):
-        return True
-
-    if not incoming:
-        if not state.get("deferred") or expected:
-            state["weapon_address"] = 0
-            state["prepared_category"] = ""
-            state["prepared_source"] = ""
-            state["prepared_evidence"] = ""
-            state["prepared_collector_address"] = 0
-            state["deferred"] = True
-            state["weak_signal_seen"] = False
-            state["equip_gaps"] += 1
-            logging.info(
-                "[BL4ThirdPersonPOC] ADS_PRESS_EQUIP_GAP_PRESERVED "
-                f"source={source!r}, outgoing=0x{expected:016X}"
-            )
-        return False
-
-    was_deferred = bool(state.get("deferred"))
-    owner_module._prepare_pending_ads_press(
-        weapon,
-        collector_address=collector_address,
-    )
-    state["weapon_address"] = incoming
-    state["deferred"] = False
-    state["weak_signal_seen"] = False
-    if was_deferred:
-        state["deferred_resolved"] += 1
-    else:
-        state["equip_rebinds"] += 1
-    logging.info(
-        "[BL4ThirdPersonPOC] ADS_PRESS_EQUIP_REBOUND "
-        f"source={source!r}, incoming=0x{incoming:016X}, "
-        f"category={state['prepared_category']!r}, "
-        f"deferred={was_deferred}"
-    )
-    return True
-
-
-def _update_pending_ads_press_impl(*, owner_module) -> None:
-    state = owner_module._ads_press_intent
-    if not state.get("pending"):
-        return
-    if (
-        not owner_module._third_person_enabled
-        or not owner_module._third_person_pushed
-        or owner_module._vehicle_camera_active
-        or owner_module._ladder_active
-        or owner_module._shop_camera_active
-    ):
-        owner_module._clear_pending_ads_press("camera_state_changed")
-        return
-
-    _pc, pawn, camera_manager = owner_module._get_runtime()
-    if pawn is None or camera_manager is None:
-        owner_module._clear_pending_ads_press("runtime_unavailable")
-        return
-    try:
-        if owner_module._ffyl_camera_active(pawn, camera_manager):
-            owner_module._clear_pending_ads_press("ffyl_camera", outcome="invalid")
-            return
-        if not owner_module._reconcile_pending_ads_press_weapon(
-            pawn,
-            camera_manager,
-            "frame",
-        ):
-            if owner_module._ads_press_intent.get("deferred"):
-                return
-            owner_module._clear_pending_ads_press("runtime_identity_changed")
-            return
-        if owner_module._native_zoom_confirms_ads(pawn):
-            owner_module._activate_confirmed_ads_press(
-                pawn,
-                camera_manager,
-                "native_zoom_state",
-            )
-            return
-        owner_module._note_weak_zoom_signal(pawn, "frame")
-        # No elapsed-time decision is made here.  A real ADS press is
-        # confirmed by Oak's zoom state/event; an unconfirmed press remains
-        # inert until its physical release (the throwable/use-object path).
-        return
-    except Exception as exc:
-        state["errors"] += 1
-        state["last_error"] = f"{type(exc).__name__}: {exc}"
-        owner_module._ads_debug_error("press_confirmation", exc)
-        owner_module._clear_pending_ads_press("confirmation_error")
-
-
-def _handle_first_person_ads_input_impl(
-    event: EInputEvent,
-    *,
-    owner_module,
-) -> None:
-
-    if (
-        event == owner_module.EInputEvent.IE_Released
-        and owner_module._ads_press_intent.get("pending")
-    ):
-        _pc, release_pawn, release_manager = owner_module._get_runtime()
-        try:
-            if (
-                release_pawn is not None
-                and release_manager is not None
-                and owner_module._reconcile_pending_ads_press_weapon(
-                    release_pawn,
-                    release_manager,
-                    "release",
-                )
-                and owner_module._native_zoom_confirms_ads(release_pawn)
-            ):
-                owner_module._activate_confirmed_ads_press(
-                    release_pawn,
-                    release_manager,
-                    "native_zoom_state_on_release",
-                )
-            else:
-                owner_module._clear_pending_ads_press(
-                    "released_without_zoom_confirmation",
-                    outcome="release",
-                )
-                owner_module._ads_handoff["held"] = False
-                return
-        except Exception as exc:
-            owner_module._ads_press_intent["errors"] += 1
-            owner_module._ads_press_intent["last_error"] = (
-                f"release_confirmation: {type(exc).__name__}: {exc}"
-            )
-            owner_module._clear_pending_ads_press("release_confirmation_error")
-            owner_module._ads_handoff["held"] = False
-            return
-
-    if event == owner_module.EInputEvent.IE_Released:
-        owner_module._ads_handoff["held"] = False
-        try:
-            if owner_module._ads_handoff.get("latch_active"):
-                _pc, release_pawn, _manager = owner_module._get_runtime()
-                if release_pawn is not None:
-                    owner_module._ads_write_zoom_latches(
-                        release_pawn,
-                        wants=False,
-                        pending=False,
-                    )
-                owner_module._ads_handoff["latch_active"] = False
-        except Exception as exc:
-            owner_module._ads_handoff["errors"] += 1
-            owner_module._ads_handoff["last_error"] = (
-                f"physical_release: {type(exc).__name__}: {exc}"
-            )
-        owner_module._cleanup_ads_handoff("physical_release")
-
-    if owner_module._vehicle_camera_active or owner_module._shop_camera_active:
-        return
-
-    if owner_module._ladder_active:
-        return
-
-    if not owner_module._third_person_enabled:
-        return
-
-    _pc, pawn, camera_manager = owner_module._get_runtime()
-
-    if pawn is None or camera_manager is None:
-        return
-
-    if event == owner_module.EInputEvent.IE_Pressed:
-        if owner_module._ffyl_camera_active(pawn, camera_manager):
-            owner_module._clear_pending_ads_press("ffyl_camera", outcome="invalid")
-            logging.info("[BL4ThirdPersonPOC] FFYL_ADS_BLOCKED stage='press'")
-            return
-        if owner_module._ads_active or owner_module._ads_route != "hip":
-            if not (owner_module._ads_route == "tps" and not owner_module._ads_active):
-                owner_module._ads_debug["ignored_events"] += 1
-                return
-        owner_module._arm_pending_ads_press(pawn, camera_manager)
-        try:
-            if owner_module._native_zoom_confirms_ads(pawn):
-                owner_module._activate_confirmed_ads_press(
-                    pawn,
-                    camera_manager,
-                    "native_zoom_state_immediate",
-                )
-        except Exception as exc:
-            owner_module._ads_press_intent["errors"] += 1
-            owner_module._ads_press_intent["last_error"] = (
-                f"immediate_confirmation: {type(exc).__name__}: {exc}"
-            )
-        return
-
-    if event == owner_module.EInputEvent.IE_Released:
-        if owner_module._ads_route == "tps" and owner_module._ads_active:
-            owner_module._ads_active = False
-            try:
-                owner_module._release_hybrid_tps_ads()
-                owner_module._apply_camera_offset()
-            except Exception as exc:
-                owner_module._ads_debug_error("tps_release", exc)
-                owner_module._cancel_hybrid_ads("release_failure")
-            return
-
-        if not owner_module._ads_active:
-            return
-
-        owner_module._ads_active = False
-        previous_route = owner_module._ads_route
-        owner_module._ads_route = "hip"
-        owner_module._ads_debug["native_releases"] += 1
-        # Hybrid ADS: leaving the scope blends back like the scope exit.
-        release_time = hybrid_ads.release_transition(
-            owner_module, owner_module.ADS_CAMERA_TRANSITION_TIME
-        )
-
-        try:
-            camera_manager.SetActorCameraMode(
-                pawn,
-                "ThirdPerson",
-                "",
-                release_time,
-                False,
-                True,
-            )
-
-            owner_module._apply_camera_offset()
-
-            logging.info(
-                "[BL4ThirdPersonPOC] HYBRID_ADS_RELEASED "
-                f"route={previous_route!r}; "
-                "SetActorCameraMode -> ThirdPerson"
-            )
-
-        except Exception as exc:
-            owner_module._ads_debug_error("native_fps_release", exc)
 
 
 def _push_third_person_impl(*, transition_time: float = 1.0, owner_module) -> bool:

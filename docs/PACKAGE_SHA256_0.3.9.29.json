@@ -1,0 +1,29 @@
+{
+  "version": "0.3.9.29",
+  "base": "0.3.9.28",
+  "tests": {
+    "total": 461,
+    "passed": 457,
+    "skipped": 4
+  },
+  "sdkmod_sha256": "a0e2167ff8ee3a96377fdc18228e18b0cc4fd6d09851353224d03819f5143ff9",
+  "sdkmod_source_byte_match": true,
+  "added": [
+    "BL4ThirdPersonPOC/omni/hitch.py"
+  ],
+  "production_changes": [
+    "BL4ThirdPersonPOC/__init__.py",
+    "BL4ThirdPersonPOC/input_bindings.py",
+    "BL4ThirdPersonPOC/omni/animation.py",
+    "BL4ThirdPersonPOC/omni/grenade_facing.py",
+    "BL4ThirdPersonPOC/omni/ground.py",
+    "BL4ThirdPersonPOC/omni/lifecycle.py",
+    "BL4ThirdPersonPOC/omni/rebind_cache.py",
+    "BL4ThirdPersonPOC/omni/sampling.py",
+    "BL4ThirdPersonPOC/omni/session.py",
+    "BL4ThirdPersonPOC/omni/slide.py",
+    "BL4ThirdPersonPOC/omni/vehicle_handoff.py"
+  ],
+  "native_modules_changed": [],
+  "in_game_validation": "pending"
+}

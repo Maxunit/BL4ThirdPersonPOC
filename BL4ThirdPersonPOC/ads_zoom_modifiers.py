@@ -99,12 +99,10 @@ def update(mod):
     if not (
         isinstance(ads, dict)
         and ads.get("phase") == "ads"
-        and handoff.get("held")
         and mod._ads_active
         and mod._ads_route == "tps"
         and handoff.get("incoming_weapon")
         and (int(handoff.get("equip_ordinal", 0)) >= 2 or isinstance(settled, dict))
-        and not handoff.get("latch_active")
         and not handoff.get("reticle_rebind_active")
         and ads.get("transition") is None
         and mod._third_person_enabled

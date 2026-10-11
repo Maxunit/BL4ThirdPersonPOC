@@ -8,6 +8,7 @@ from types import SimpleNamespace as S
 from unittest.mock import patch
 
 import support
+from BL4ThirdPersonPOC import ads_handoff, ads_control
 import test_hybrid_omni_handoff_0_3_9_14 as handoff_tests
 from BL4ThirdPersonPOC import ads_events, camera_math, hybrid_ads
 
@@ -33,8 +34,7 @@ class ZoomReturnTests(unittest.TestCase):
         mod._derive_ads_target_fov = camera_math._derive_ads_target_fov
         mod._read_live_ads_fov = camera_math._read_live_ads_fov
         mod._find_ads_collector = lambda weapon: S(Name='Collector')
-        mod._ads_restore_handoff_latches = lambda reason: None
-        mod._cleanup_ads_handoff = lambda reason: ads_events._cleanup_ads_handoff_impl(
+        mod._cleanup_ads_handoff = lambda reason: ads_handoff._cleanup_ads_handoff_impl(
             reason, owner_module=mod)
         mod._ads_debug = dict(tps_presses=0, category_counts={}, hold_writes=0)
         mod._set_hybrid_tps_fov = lambda value: ads_events._set_hybrid_tps_fov_impl(
@@ -74,7 +74,7 @@ class ZoomReturnTests(unittest.TestCase):
         self.assertTrue(self.camera.CameraModeState.bIsTransitioning)
 
     def reconcile(self):
-        ads_events._update_hybrid_ads_route_reconciliation_impl(owner_module=self.mod)
+        ads_handoff._update_hybrid_ads_route_reconciliation_impl(owner_module=self.mod)
 
     def test_destination_is_held_tps_aim_during_blend_not_hip(self):
         self.return_from_scope()

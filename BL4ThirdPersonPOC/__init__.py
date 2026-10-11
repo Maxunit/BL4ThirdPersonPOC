@@ -12,7 +12,7 @@ Native lifetime and handoff contracts are described in docs/NATIVE_LIFECYCLE.md.
 from __future__ import annotations
 
 # Available before build_mod invokes the automatic enable callback.
-MOD_VERSION = "0.3.9.21"
+MOD_VERSION = "0.3.9.29"
 HYBRID_ADS_AVAILABLE = True  # optional Hybrid diagnostics QA
 
 import builtins
@@ -1543,13 +1543,11 @@ def swap_shoulder() -> None:
     return swap_shoulder_impl(owner_module=sys.modules[__name__])
 
 
-from .camera_events import (
-    _reset_ads_press_intent_impl,
-    _clear_pending_ads_press_impl,
-    _note_weak_zoom_signal_impl,
-    _prepare_pending_ads_press_impl,
-    _arm_pending_ads_press_impl,
-)
+from .ads_control import _reset_ads_press_intent_impl
+from .ads_control import _clear_pending_ads_press_impl
+from .ads_control import _note_weak_zoom_signal_impl
+from .ads_control import _prepare_pending_ads_press_impl
+from .ads_control import _arm_pending_ads_press_impl
 
 
 def _reset_ads_press_intent() -> None:
@@ -1587,10 +1585,11 @@ def _prepare_pending_ads_press(weapon: Any, *, collector_address: int = 0) -> No
     )
 
 
-def _arm_pending_ads_press(pawn: Any, camera_manager: Any) -> None:
+def _arm_pending_ads_press(pawn: Any, camera_manager: Any, *, source: str = "physical") -> None:
     return _arm_pending_ads_press_impl(
         pawn,
         camera_manager,
+        source=source,
         owner_module=sys.modules[__name__],
     )
 
@@ -1615,9 +1614,10 @@ def _reset_reticle_publisher() -> None:
     _reticle_gate_last_fail = ""
 
 
-def _publish_tps_reticle(reason: str) -> str:
-    """Attempt exactly one publish and return the resulting status string
-    (e.g. 'published', 'already_visible', 'gate_skipped', 'faulted')."""
+def _set_ads_reticle_visibility(
+    reason: str, *, scope_identity: tuple[int, ...] | None = None
+) -> str:
+    """One guarded model publication or Hybrid scope handover, without retries."""
     global _reticle_publisher, _reticle_publish_faulted
     if _reticle_publish_faulted:
         return "faulted"
@@ -1637,15 +1637,25 @@ def _publish_tps_reticle(reason: str) -> str:
             else:
                 reticle_module = importlib.import_module(module_name)
             _reticle_publisher = reticle_module.create_publisher(sys.modules[__name__])
-        result = _reticle_publisher()
+        result = (
+            _reticle_publisher()
+            if scope_identity is None
+            else _reticle_publisher.hide_for_scope(scope_identity)
+        )
         status = result["status"]
         _reticle_publish_counts[status] = _reticle_publish_counts.get(status, 0) + 1
-        if status == "published":
+        if status in ("published", "hidden"):
+            event = "TPS_RETICLE_PUBLISHED" if status == "published" else "HYBRID_TPS_RETICLE_HIDDEN"
             logging.info(
-                f"[BL4ThirdPersonPOC] TPS_RETICLE_PUBLISHED reason={reason!r} {result}"
+                f"[BL4ThirdPersonPOC] {event} reason={reason!r} {result}"
+            )
+        elif scope_identity is not None:
+            logging.info(
+                f"[BL4ThirdPersonPOC] HYBRID_TPS_RETICLE_HANDOVER "
+                f"status={status!r} gate_fail={_reticle_gate_last_fail!r}"
             )
         return status
-    except Exception as exc:
+    except (AttributeError, RuntimeError, TypeError, ValueError, OSError, struct.error) as exc:
         _reticle_publish_faulted = True
         logging.error(
             f"[BL4ThirdPersonPOC] TPS_RETICLE_PUBLISH_DISABLED error={type(exc).__name__}: {exc}"
@@ -1653,35 +1663,31 @@ def _publish_tps_reticle(reason: str) -> str:
         return "faulted"
 
 
-def _request_tps_reticle_publish(reason: str) -> None:
-    """Publish at the equip event; retain transient readiness refusals."""
-    global _reticle_publish_pending
-    status = _publish_tps_reticle(reason)
-    _reticle_publish_pending = status in ("gate_skipped", "unstable_snapshot")
-    state = _ads_tps_state
-    if isinstance(state, dict):
-        state["reticle_readiness_seen"] = None
-        state["reticle_publish_weapon"] = state.get("weapon_address", 0)
-    logging.info(
-        "[BL4ThirdPersonPOC] TPS_RETICLE_EVENT_RESULT "
-        f"reason={reason!r}, status={status!r}, "
-        f"gate_fail={_reticle_gate_last_fail!r}, pending={_reticle_publish_pending}"
-    )
+def _publish_tps_reticle(reason: str) -> str:
+    return _set_ads_reticle_visibility(reason)
+
+
+def _hide_hybrid_tps_reticle(identity: tuple[int, ...]) -> str:
+    return _set_ads_reticle_visibility("hybrid_scope_enter", scope_identity=identity)
+
+
+def _request_tps_reticle_publish(reason: str) -> str:
+    from .ads_handoff import _request_tps_reticle_publish_impl
+
+    return _request_tps_reticle_publish_impl(reason, owner_module=sys.modules[__name__])
 
 
 def _update_pending_tps_reticle() -> None:
-    from .ads_events import _update_pending_tps_reticle_impl
+    from .ads_handoff import _update_pending_tps_reticle_impl
 
     _update_pending_tps_reticle_impl(owner_module=sys.modules[__name__])
 
 
-from .camera_events import (
-    _ffyl_camera_active_impl,
-    _activate_confirmed_ads_press_impl,
-    _reconcile_pending_ads_press_weapon_impl,
-    _update_pending_ads_press_impl,
-    _handle_first_person_ads_input_impl,
-)
+from .camera_events import _ffyl_camera_active_impl
+from .ads_control import _activate_confirmed_ads_press_impl
+from .ads_control import _reconcile_pending_ads_press_weapon_impl
+from .ads_control import _update_pending_ads_press_impl
+from .ads_control import _handle_first_person_ads_input_impl
 
 
 def _ffyl_camera_active(pawn: Any, camera_manager: Any) -> bool:
@@ -1696,11 +1702,14 @@ def _activate_confirmed_ads_press(
     pawn: Any,
     camera_manager: Any,
     confirmation: str,
+    *,
+    base_calibration=None,
 ) -> None:
     return _activate_confirmed_ads_press_impl(
         pawn,
         camera_manager,
         confirmation,
+        base_calibration=base_calibration,
         owner_module=sys.modules[__name__],
     )
 
@@ -2291,7 +2300,7 @@ def _begin_hybrid_ads_transition(
     )
 
 
-from .ads_events import _reset_ads_handoff_debug_impl
+from .ads_handoff import _reset_ads_handoff_debug_impl
 
 
 def _reset_ads_handoff_debug() -> None:
@@ -2305,72 +2314,22 @@ def _ads_zoom_fields(pawn: Any) -> str:
     return _read_ads_zoom_fields(pawn)
 
 
-from .ads_events import _ads_write_zoom_latches_impl
+from .ads_handoff import _cleanup_ads_handoff_impl
 
 
-def _ads_write_zoom_latches(
-    pawn: Any,
-    *,
-    wants: bool,
-    pending: bool,
-) -> None:
-    return _ads_write_zoom_latches_impl(
-        pawn, wants=wants, pending=pending, owner_module=sys.modules[__name__]
-    )
-
-
-from .ads_events import _ads_restore_handoff_latches_impl
-
-
-def _ads_restore_handoff_latches(reason: str) -> None:
-    return _ads_restore_handoff_latches_impl(reason, owner_module=sys.modules[__name__])
-
-
-from .ads_events import _cleanup_ads_handoff_impl
-
-
-def _cleanup_ads_handoff(reason: str, *, clear_held: bool = False) -> None:
+def _cleanup_ads_handoff(reason: str) -> None:
     return _cleanup_ads_handoff_impl(
-        reason, clear_held=clear_held, owner_module=sys.modules[__name__]
+        reason, owner_module=sys.modules[__name__]
     )
 
 
-from .ads_events import _start_ads_handoff_latch_mask_impl
-
-
-def _start_ads_handoff_latch_mask(pawn: Any, reason: str) -> None:
-    return _start_ads_handoff_latch_mask_impl(
-        pawn, reason, owner_module=sys.modules[__name__]
-    )
-
-
-from .ads_events import _commit_ads_handoff_pose_impl
-
-
-def _commit_ads_handoff_pose(pawn: Any, reason: str) -> None:
-    return _commit_ads_handoff_pose_impl(
-        pawn, reason, owner_module=sys.modules[__name__]
-    )
-
-
-from .ads_events import _release_ads_handoff_latches_impl
-
-
-def _release_ads_handoff_latches(pawn: Any, reason: str) -> None:
-    return _release_ads_handoff_latches_impl(
-        pawn, reason, owner_module=sys.modules[__name__]
-    )
-
-
-from .ads_events import (
-    _update_hybrid_ads_weapon_handoff_impl,
-    _update_hybrid_ads_route_reconciliation_impl,
-    _arm_late_tps_ads_equip_handoff_impl,
-    _hybrid_ads_weapon_equipped_pre_hook_impl,
-    _hybrid_ads_character_weapon_equipped_pre_hook_impl,
-    _hybrid_ads_character_weapon_equipped_post_hook_impl,
-    _hybrid_ads_weapon_equipped_post_hook_impl,
-)
+from .ads_handoff import _update_hybrid_ads_weapon_handoff_impl
+from .ads_handoff import _update_hybrid_ads_route_reconciliation_impl
+from .ads_handoff import _arm_late_tps_ads_equip_handoff_impl
+from .ads_handoff import _hybrid_ads_weapon_equipped_pre_hook_impl
+from .ads_handoff import _hybrid_ads_character_weapon_equipped_pre_hook_impl
+from .ads_handoff import _hybrid_ads_character_weapon_equipped_post_hook_impl
+from .ads_handoff import _hybrid_ads_weapon_equipped_post_hook_impl
 
 
 def _update_hybrid_ads_weapon_handoff(
@@ -2469,6 +2428,7 @@ def _start_hybrid_tps_ads(
     prepared_collector_address: int = 0,
     *,
     resume_state: Any = None,
+    base_calibration: Any = None,
 ) -> None:
     return _start_hybrid_tps_ads_impl(
         camera_manager,
@@ -2477,6 +2437,7 @@ def _start_hybrid_tps_ads(
         evidence,
         prepared_collector_address,
         resume_state=resume_state,
+        base_calibration=base_calibration,
         owner_module=sys.modules[__name__],
     )
 
@@ -3111,6 +3072,10 @@ from .ui_and_commands import _emit_gameplay_debug_state
     display_name="Dump Gameplay Debug State",
 )
 def dump_gameplay_debug_state() -> None:
+    from .omni import profiler
+
+    if profiler.trigger(sys.modules[__name__]):
+        return
     from . import ads_qa_snapshot
 
     ads_qa_snapshot.capture(sys.modules[__name__])
@@ -3374,7 +3339,7 @@ def dump_ui_publish_topology_console(_args: Any) -> None:
     "bl4tps_omni",
     description=(
         "Omnidirectional movement: on | off | status | report | diag on|off | "
-        "hybrid on|off|status"
+        "hybrid on|off|status | profile total|detail [label]|stop|status"
     ),
 )
 def omni_movement_console(args: Any) -> None:
@@ -3390,6 +3355,17 @@ def omni_movement_console(args: Any) -> None:
         elif action == "report":
             path = omni.save_report(owner, "CONSOLE_REPORT")
             logging.info(f"[BL4ThirdPersonPOC] OMNI_REPORT json={path}")
+        elif action == "profile":
+            from .omni import profiler
+
+            if args.value in ("total", "detail"):
+                profiler.arm(owner, args.value, args.extra or "idle")
+            elif args.value == "stop":
+                profiler.cancel(owner)
+            elif args.value not in (None, "status"):
+                raise ValueError("usage: bl4tps_omni profile total|detail [label]|stop|status")
+            logging.info(f"[BL4ThirdPersonPOC] OMNI_PROFILE {profiler.status(owner)}")
+            return
         elif action == "diag":
             if args.value not in ("on", "off"):
                 logging.info("[BL4ThirdPersonPOC] usage: bl4tps_omni diag on|off")
@@ -3419,7 +3395,7 @@ def omni_movement_console(args: Any) -> None:
 
 omni_movement_console.add_argument(
     "action", nargs="?", default="status",
-    choices=("on", "off", "status", "report", "diag", "hybrid"),
+    choices=("on", "off", "status", "report", "diag", "hybrid", "profile"),
 )
 omni_movement_console.add_argument("value", nargs="?", default=None)
 omni_movement_console.add_argument("extra", nargs="?", default=None)

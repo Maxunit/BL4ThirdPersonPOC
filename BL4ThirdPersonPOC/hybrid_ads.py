@@ -112,7 +112,7 @@ def _consume_scope_request(mod: Any) -> None:
         expected = tuple(owner() for owner in request['owners'])
         same = all(a is not None and b is not None and a == b for a, b in zip(expected, live))
         if (same and not bool(pc.bShowMouseCursor)
-                and request['route'] == mod._ads_route and mod._ads_handoff.get('held')):
+                and request['route'] == mod._ads_route):
             result = toggle_scope(mod)
     session.report['hybrid_scope_last'] = result
 
@@ -199,7 +199,7 @@ def _return_resume(mod: Any, camera: Any) -> Optional[dict]:
         return None
     resume = pending.get('hybrid_tps_resume')
     weapon = camera.CameraModeInputs.Weapon
-    if (not mod._ads_active or not mod._ads_handoff.get('held')
+    if (not mod._ads_active
             or not valid_tps_resume(mod, camera, weapon, resume)):
         return None
     return resume
@@ -463,13 +463,13 @@ def toggle_scope(mod: Any) -> str:
 def enter_scope(mod: Any) -> str:
     """Held TPS ADS -> native first-person scope of the same weapon."""
     pc, pawn, camera = mod._get_runtime()
-    if pawn is None or camera is None:
+    if pc is None or pawn is None or camera is None:
         return _refuse(mod, 'no_runtime')
     handoff, ads = mod._ads_handoff, mod._ads_tps_state
-    if not (mod._ads_active and mod._ads_route == 'tps' and handoff.get('held')
+    if not (mod._ads_active and mod._ads_route == 'tps'
             and isinstance(ads, dict) and ads.get('phase') == 'ads'):
         return _refuse(mod, 'not_holding_tps_ads')
-    if handoff.get('latch_active') or handoff.get('reticle_rebind_active') or handoff.get('in_gap'):
+    if handoff.get('reticle_rebind_active') or handoff.get('in_gap'):
         return _refuse(mod, 'weapon_handoff')
     blocked = _blocked_by_state(mod)
     if blocked:
@@ -490,6 +490,7 @@ def enter_scope(mod: Any) -> str:
     mode_state = ads['mode_state']
     fov_from, fov_to = float(mode_state.BaseFOVOffset), float(ads['original_offset'])
     tps_hold = _capture_tps_hold(pc, pawn, camera, weapon, ads)
+    reticle_identity = tuple(mod._ads_object_address(o) for o in (pc, pawn, camera, weapon))
     _pause_omni_before_scope(mod, pc, pawn, camera)
     # Commit the ADS route only after the SDK call. Omni is already paused;
     # a refused switch resumes through its normal release/owner guards.
@@ -501,12 +502,15 @@ def enter_scope(mod: Any) -> str:
     mod._ads_tps_state = None
     mod._ads_collector_address = 0
     mod._cleanup_ads_handoff('hybrid_scope_enter')
-    handoff['held'] = True
     handoff['route_weapon'] = weapon_address
     mod._ads_active = True
     mod._ads_route = 'sniper_fps' if category == 'sniper_rifle' else 'fallback_fps'
     _state.update(scoped=True, scope_weapon=weapon_address, last_event='SCOPE_ON')
     _state['tps_hold'] = tps_hold
+    # A camera-only switch does not emit another native zoom notification.
+    # Retire the TPS model after the FPS route commits; on return, the existing
+    # hybrid_scope_exit publication reacquires the current local model.
+    mod._hide_hybrid_tps_reticle(reticle_identity)
     _record_fov(mod, camera, 'SCOPE_ON')
     _start_fade('out', start_offset)
     _state['scope_enters'] += 1
@@ -523,7 +527,7 @@ def exit_scope(mod: Any) -> str:
     if pawn is None or camera is None:
         return _refuse(mod, 'no_runtime')
     handoff = mod._ads_handoff
-    if not (mod._ads_active and mod._ads_route in FPS_ROUTES and handoff.get('held')):
+    if not (mod._ads_active and mod._ads_route in FPS_ROUTES):
         _state['scoped'] = False
         return _refuse(mod, 'not_scoped')
     if handoff.get('route_pending'):

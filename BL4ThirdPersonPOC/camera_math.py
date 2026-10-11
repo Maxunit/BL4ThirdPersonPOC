@@ -218,10 +218,7 @@ def _read_native_zoom_confirmation(pawn: Any) -> bool:
     """Require an active native zoom state, never bWantsToZoom alone."""
     zoom = pawn.ZoomState
     native_state = int(zoom.State)
-    wants = bool(zoom.bWantsToZoom)
-    return native_state in (1, 2) or (
-        wants and (bool(zoom.bPendingZoom) or bool(zoom.bTickingZoom))
-    )
+    return native_state in (1, 2)
 
 
 def _read_ads_zoom_fields(pawn: Any) -> str:

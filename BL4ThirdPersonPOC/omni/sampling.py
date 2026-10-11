@@ -8,6 +8,14 @@ from .common import TAG, FRAME_STRIDE, angle, parts, direction, movement_input_s
 class SamplingMixin:
 
     def bound(self):
+        # Inside one owned game-thread callback the local controller, pawn,
+        # camera and movement cannot change between pipeline stages: no other
+        # game-thread code runs until the callback returns. The full identity
+        # check therefore runs once per callback; the tuple is dropped in the
+        # callback's finally and is never kept across callbacks.
+        cached = getattr(self, '_callback_objects', None)
+        if cached is not None:
+            return cached
         live = tuple((ref() for ref in self.refs))
         if any((o is None for o in live)):
             raise RuntimeError('Bound gameplay objects expired')
@@ -16,7 +24,51 @@ class SamplingMixin:
             raise RuntimeError('Local player or camera changed')
         if live[1].OakCharacterMovement != live[3]:
             raise RuntimeError('Movement component changed')
+        if getattr(self, '_callback_scope', False):
+            self._callback_objects = live
         return live
+
+    def open_callback_scope(self):
+        """Start one owned callback: the next bound() validates fully, later ones reuse it."""
+        self._callback_scope = True
+        self._callback_objects = None
+        self._callback_values = {}
+        self._callback_combat_read = False
+        self._callback_handler = None
+
+    def close_callback_scope(self):
+        """End the callback: no runtime object or value survives it."""
+        self._callback_scope = False
+        self._callback_objects = None
+        self._callback_values = None
+        self._callback_combat_read = False
+        self._callback_handler = None
+
+    def callback_value(self, key, read):
+        """Read a native state getter once per callback; game writes invalidate it."""
+        values = getattr(self, '_callback_values', None)
+        if values is None or not getattr(self, '_callback_scope', False):
+            return read()
+        if key not in values:
+            values[key] = read()
+        return values[key]
+
+    def invalidate_callback_values(self):
+        values = getattr(self, '_callback_values', None)
+        if values:
+            values.clear()
+
+    def is_dashing(self, pawn):
+        """Native dash state of the bound pawn, read once per callback."""
+        return self.callback_value('dashing', lambda: bool(pawn.IsCharacterDashing()))
+
+    def camera_mode(self, pawn, camera):
+        """Camera mode for stage decisions, read once per callback.
+
+        The sampling guard (_sample_frame) still reads it fresh, so an inline
+        camera switch inside the pipeline keeps failing closed.
+        """
+        return self.callback_value('camera_mode', lambda: str(camera.GetActorCameraMode(pawn)))
 
     def optional(self, sample, name, read):
         if name in self.report['optional_field_errors']:
@@ -73,12 +125,15 @@ class SamplingMixin:
             mode = str(camera.GetActorCameraMode(pawn))
             ui = bool(pc.bShowMouseCursor)
             special = {f: bool(getattr(self.mod, f, False)) for f in ('_ads_active', '_vehicle_camera_active', '_shop_camera_active', '_ladder_active', '_slide_active')}
-            s = {'t': monotonic() - self.started, 'update_index': self.frames, 'actions': actions, **input_state, 'action_intent': actions, 'action_change': actions != self.previous_actions, 'actor_rotation': actor, 'control_rotation': control, 'camera_rotation': view, 'velocity': velocity, 'acceleration': acceleration, 'last_movement_input': input_vector, 'horizontal_speed': math.hypot(velocity['X'], velocity['Y']), 'velocity_yaw': direction(velocity), 'acceleration_yaw': direction(acceleration), 'input_yaw': direction(selected_input), 'camera_minus_actor': angle(view['Yaw'], actor['Yaw']), 'control_minus_actor': angle(control['Yaw'], actor['Yaw']), 'camera_minus_control': angle(view['Yaw'], control['Yaw']), 'camera_mode': mode, 'mouse_cursor': ui, 'special_states': special, 'movement_mode': int(movement.MovementMode), 'custom_movement_mode': int(movement.CustomMovementMode), 'normal_tps_sample': mode == 'ThirdPerson' and (not ui) and (not any((value for field, value in special.items() if field != '_ads_active'))) and (int(movement.MovementMode) == 1), 'combat': dict(self.combat), 'orientation_flags': {'orient_to_movement': bool(movement.bOrientRotationToMovement), 'controller_desired_rotation': bool(movement.bUseControllerDesiredRotation), 'controller_yaw': bool(pawn.bUseControllerRotationYaw)}}
+            s = {'t': monotonic() - self.started, 'update_index': self.frames, 'actions': actions, **input_state, 'action_intent': actions, 'action_change': actions != self.previous_actions, 'actor_rotation': actor, 'control_rotation': control, 'camera_rotation': view, 'velocity': velocity, 'acceleration': acceleration, 'last_movement_input': input_vector, 'horizontal_speed': math.hypot(velocity['X'], velocity['Y']), 'velocity_yaw': direction(velocity), 'acceleration_yaw': direction(acceleration), 'input_yaw': direction(selected_input), 'camera_minus_actor': angle(view['Yaw'], actor['Yaw']), 'control_minus_actor': angle(control['Yaw'], actor['Yaw']), 'camera_minus_control': angle(view['Yaw'], control['Yaw']), 'camera_mode': mode, 'mouse_cursor': ui, 'special_states': special, 'movement_mode': int(movement.MovementMode), 'custom_movement_mode': int(movement.CustomMovementMode), 'normal_tps_sample': mode == 'ThirdPerson' and (not ui) and (not any((value for field, value in special.items() if field != '_ads_active'))) and (int(movement.MovementMode) == 1), 'combat': dict(self.combat)}
+            diagnostics = getattr(self, 'collect_pose_diagnostics', True)
+            if diagnostics:
+                s['orientation_flags'] = {'orient_to_movement': bool(movement.bOrientRotationToMovement), 'controller_desired_rotation': bool(movement.bUseControllerDesiredRotation), 'controller_yaw': bool(pawn.bUseControllerRotationYaw)}
             s.update(movement_input_vector=selected_input, movement_input_phase=input_phase, pending_movement_input=pending_input)
             if s['velocity_yaw'] is not None:
                 s['velocity_minus_camera'] = angle(s['velocity_yaw'], view['Yaw'])
                 s['velocity_minus_actor'] = angle(s['velocity_yaw'], actor['Yaw'])
-            mesh = getattr(pawn, 'Mesh', None)
+            mesh = getattr(pawn, 'Mesh', None) if diagnostics else None
             if mesh is not None:
                 self.optional(s, 'mesh_relative_rotation', lambda: parts(mesh.RelativeRotation, ('Pitch', 'Yaw', 'Roll')))
                 anim = getattr(mesh, 'AnimScriptInstance', None)
@@ -104,9 +159,9 @@ class SamplingMixin:
                 raise RuntimeError('Trace callback outside owned game thread')
             pc, pawn, camera, movement = self.bound()
             if not self.ready:
-                self.native.install()
-                self.ready = True
-            self.native.validate()
+                self._bind_root()
+            if self.native_audit_due(0):
+                self.native.validate()
             self.native.control[6] = self.frames + 1
             self.native.consume()
             before = len(self.report['samples'])
@@ -130,6 +185,7 @@ class SamplingMixin:
         if not self.updates.is_game_thread():
             raise RuntimeError('Actor rotation writes require owned game thread')
         self.report['game_writes'] += 1
+        self.invalidate_callback_values()
         return bool(pawn.K2_SetActorRotation(make_struct('/Script/CoreUObject.Rotator', **value), False))
 
     def _body_frame(self, obj, args, ret, func):

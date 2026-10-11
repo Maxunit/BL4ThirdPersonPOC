@@ -1,19 +1,20 @@
-# BL4ThirdPersonPOC 0.3.9.21 Hybrid QA
+# BL4ThirdPersonPOC 0.3.9.29 Omni Bind & Hitch QA (Claude)
 
-Hybrid verwendet dieselben TPS-Kamera-Offsets und denselben ADS-Zoompfad wie
-reguläres TPS-ADS. Die zusätzliche 35-cm-Annäherung wurde vollständig entfernt,
-einschließlich Implementierung, Konsolenbefehl und Statusfeld. Der Scope-Wechsel
-behält die bisherigen Kamera- und FOV-Überblendungen.
+Basiert auf 0.3.9.28. Neu: ein Ruckler-Logger für Omnis eigene Callbacks
+(`[OmniHitch]` in der Konsole), gestaffeltes Binden einer Session über mehrere
+Updates statt in einem langen Frame, günstigeres Neu-Binden (Knochen, Schema,
+Tastenscan) und ein schlankerer Laufen-Pfad (Kampf-Auswertung und Handler-Prüfung
+einmal pro Update, Granaten-Scan ohne Pfadnamen).
 
-Die Zoom-/Waffenübergabe-Korrekturen aus .20 sowie die Omni-/Fahrzeugoptimierungen
-aus .19 sind enthalten. Hybrid bleibt optional, Standard aus.
+- [Befund und Änderungen](docs/CHANGELOG_0.3.9.29_OMNI_BIND_HITCH_QA.md)
+- [Testplan: Ruckler zuordnen, Laufen messen](docs/TESTPLAN_0.3.9.29_OMNI_BIND_HITCH_QA.md)
+- [Lokale Validierung](docs/VALIDATION_0.3.9.29_OMNI_BIND_HITCH_QA.md)
+- Vorgänger: [0.3.9.28 Callback-Scope](docs/CHANGELOG_0.3.9.28_OMNI_CALLBACK_SCOPE_QA.md)
+- Zähl-Umgebung: `python tests/omni_idle_cost_scenario.py stand|crouch|move|turn --report`
 
-- [Changelog](docs/CHANGELOG_0.3.9.21_HYBRID_QA.md)
-- [Testplan](docs/TESTPLAN_0.3.9.21_HYBRID_QA.md)
-- [Lokale Validierung](docs/VALIDATION_0.3.9.21_HYBRID_QA.md)
-
-Frisch installieren, nur eine Mod-Version gleichzeitig. Ohne alte PyExec-Proben
-prüfen; historische Dokumente beschreiben die damaligen Versionen.
+Installierbar: `dist/BL4ThirdPersonPOC.sdkmod`; gleichwertiger Quellordner:
+`BL4ThirdPersonPOC/`. Nur eine Variante installieren. Spiel vollständig beenden
+und alte Mod-Dateien sowie ihren PyCache entfernen.
 
 ---
 

@@ -5,6 +5,7 @@ from unrealsdk import find_object
 from .common import log as logging
 from unrealsdk.unreal import WeakPointer
 from .common import TAG, angle, parts
+from . import hitch
 
 class SlideMixin:
 
@@ -81,7 +82,7 @@ class SlideMixin:
             if not self.updates.is_game_thread():
                 return
             if not self.slide_ready:
-                self.apply_slide()
+                self._bind_slide()
             self.verify_slide()
             previous = self.report['samples'][-1] if self.report['samples'] else None
             self._ground_vector_frame(obj, args, ret, func)
@@ -95,6 +96,26 @@ class SlideMixin:
                 logging.error(TAG + ' STOP_FAILED rerun to retry ' + repr(cleanup))
 
     def validate_rotate_schema(self, movement):
+        if self.rotate_schema_checked:
+            return
+        # The reviewed field belongs to the movement class, which outlives the
+        # session. A rebind on the same class (weak identity and address) reuses
+        # the primitive result instead of rescanning every reflected field.
+        cache = getattr(getattr(self, 'lifecycle_supervisor', None), 'rebind_cache', None)
+        cached = getattr(cache, 'rotate_schema', None)
+        cls = movement.Class
+        if cached is not None:
+            ref, address, schema = cached
+            if ref() is not None and ref() == cls and int(cls._get_address()) == address:
+                self.report['rotate_state_schema'] = dict(schema, reused_for_same_class=True)
+                self.rotate_schema_checked = True
+                return
+        with hitch.step('bind.rotate_schema'):
+            self._scan_rotate_schema(movement)
+        if cache is not None and self.rotate_schema_checked:
+            cache.rotate_schema = (WeakPointer(cls), int(cls._get_address()), dict(self.report['rotate_state_schema']))
+
+    def _scan_rotate_schema(self, movement):
         if not self.rotate_schema_checked:
             owners = (movement.Class, *tuple(movement.Class._superfields()))
             if len(owners) > 64:
@@ -420,8 +441,7 @@ class SlideMixin:
             self.report['block_started_update_index'] = self.frames
             self.report['follow_started_t'] = now
         if not self.ready:
-            self.native.install()
-            self.ready = True
+            self._bind_root()
         self.native.validate()
         dt = min(0.05, max(0.0, now - self.follow_previous_t))
         self.follow_previous_t = now

@@ -8,6 +8,8 @@ and fallback routes is unproven. No model/UObject pointer is retained between
 publication attempts. Crosshair presentation still requires gameplay QA.
 """
 
+from typing import Any, Callable
+
 
 def create_publisher(mod):
     """Create a guarded publisher using the caller's current local runtime.
@@ -269,8 +271,48 @@ def create_publisher(mod):
             int(mod._ads_collector_address),
         )
 
-    def publish():
-        identity = gate()
+    def scope_gate(expected_identity: tuple[int, ...]) -> tuple[int, ...] | None:
+        from . import hybrid_ads
+
+        if not (
+            hybrid_ads.active(mod)
+            and hybrid_ads.status(mod)["scoped"]
+            and mod._third_person_enabled
+            and mod._third_person_pushed
+            and mod._ads_active
+            and mod._ads_route in hybrid_ads.FPS_ROUTES
+            and not mod._vehicle_camera_active
+            and not mod._ladder_active
+            and not mod._shop_camera_active
+            and not mod._slide_active
+            and not mod._ads_handoff.get("route_pending")
+        ):
+            return fail("hybrid_scope_flags")
+        pc, pawn, manager = mod._get_runtime()
+        if any(obj is None for obj in (pc, pawn, manager)):
+            return fail("runtime_unavailable")
+        weapon = manager.CameraModeInputs.Weapon
+        identity = tuple(addr(obj) for obj in (pc, pawn, manager, weapon))
+        mode = str(manager.GetActorCameraMode(pawn))
+        camera_committed = mode == "Default" or (
+            mode == "ThirdPerson" and bool(manager.CameraModeState.bIsTransitioning)
+        )
+        if (
+            not all(identity)
+            or identity != expected_identity
+            or identity[3] != mod._ads_handoff.get("route_weapon")
+            or not camera_committed
+            or int(pawn.ZoomState.State) not in (1, 2)
+            or q(identity[3] + 0x1B0) != identity[1]
+        ):
+            return fail("hybrid_scope_identity")
+        mod._reticle_gate_last_fail = ""
+        return identity
+
+    def set_visibility(
+        visible: bool, validate: Callable[[], tuple[Any, ...] | None]
+    ) -> dict[str, Any]:
+        identity = validate()
         if identity is None:
             return {"status": "gate_skipped"}
         before = model_snapshot()
@@ -280,33 +322,34 @@ def create_publisher(mod):
         ):
             logging.info(
                 f"[BL4ThirdPersonPOC] TPS_RETICLE_UNEXPECTED_MODEL_TEXT "
-                f"category={identity[4]!r}, real_text={before['text_a0']!r}, "
+                f"real_text={before['text_a0']!r}, "
                 f"byte_90={before['byte_90']!r}"
             )
             return {"status": "model_mismatch"}
-        if before["byte_88"] == 1:
-            return {"status": "already_visible"}
-        if before["byte_88"] != 0:
+        target = int(visible)
+        if before["byte_88"] == target:
+            return {"status": "already_visible" if visible else "already_hidden"}
+        if before["byte_88"] not in (0, 1):
             return {"status": "unexpected_value"}
-        if gate() != identity or model_snapshot() != before:
+        if validate() != identity or model_snapshot() != before:
             return {"status": "unstable_snapshot"}
         model = int(before["model"], 16)
         counter = before["counter_8c"]
         next_counter = (counter + 1) & 0xFFFFFFFF
         try:
-            write(model + 0x88, b"\x01")
+            write(model + 0x88, bytes([target]))
             write(model + 0x8C, struct.pack("<I", next_counter))
-        except Exception:
+        except (RuntimeError, OSError, ValueError, struct.error):
             # Best-effort repair only while identity and model ownership match.
             current = model_snapshot()
             if (
-                gate() == identity
+                validate() == identity
                 and current["model"] == before["model"]
                 and current["text_a0"] == before["text_a0"]
-                and current["byte_88"] == 1
+                and current["byte_88"] == target
                 and current["counter_8c"] in (counter, next_counter)
             ):
-                write(model + 0x88, b"\x00")
+                write(model + 0x88, bytes([before["byte_88"]]))
                 write(
                     model + 0x8C,
                     struct.pack("<I", (current["counter_8c"] + 1) & 0xFFFFFFFF),
@@ -315,19 +358,28 @@ def create_publisher(mod):
         after = model_snapshot()
         if (
             after["model"] != before["model"]
-            or after["byte_88"] != 1
+            or after["text_a0"] != before["text_a0"]
+            or after["byte_88"] != target
             or after["counter_8c"] != next_counter
         ):
             raise RuntimeError("Reticle publication changed before verification")
-        return {
-            "status": "published",
+        result = {
+            "status": "published" if visible else "hidden",
             "weapon": hex(identity[3]),
             "model": before["model"],
-            "before": 0,
-            "after": 1,
+            "before": before["byte_88"],
+            "after": target,
             "counter": next_counter,
-            "category": identity[4],
         }
+        if visible:
+            result["category"] = identity[4]
+        return result
+
+    def publish() -> dict[str, Any]:
+        return set_visibility(True, gate)
+
+    def hide_for_scope(expected_identity: tuple[int, ...]) -> dict[str, Any]:
+        return set_visibility(False, lambda: scope_gate(expected_identity))
 
     def observe():
         """Read the validated local reticle model for explicit QA snapshots.
@@ -354,4 +406,5 @@ def create_publisher(mod):
         return dict(identity=identity, model=before, raw_88_b8=raw.hex())
 
     publish.observe = observe
+    publish.hide_for_scope = hide_for_scope
     return publish

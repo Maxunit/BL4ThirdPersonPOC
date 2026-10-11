@@ -256,6 +256,7 @@ class RebindCache:
     def __init__(self, supervisor):
         self.sup, self.mod, self.updates = supervisor, supervisor.mod, supervisor.updates
         self.entry = self.layout = self.capture = self.region = self.bones = None
+        self.rotate_schema = None
         self.thread = None
         self.page_size = None
         self.stats = dict.fromkeys(STATS, 0)
@@ -440,6 +441,7 @@ class RebindCache:
 
     def clear(self):
         self.entry = self.bones = self.layout = self.region = self.capture = self.thread = None
+        self.rotate_schema = None
         if getattr(self.mod, '_omni_rebind_memory', None) is self: del self.mod._omni_rebind_memory
 
 def layout_query(op, capture, anim, owner=None, selector=None):

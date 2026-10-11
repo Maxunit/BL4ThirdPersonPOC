@@ -385,9 +385,7 @@ class AirMixin:
         self.control[0] = 0
         self.idle_native.control[0] = 0
         self.idle_update.control[0] = 0
-        for owner in self.owners():
-            if owner.hook is not None:
-                owner.validate()
+        self.audit_owners()
         self.read_combat()
         self.native.control[0] = 1
         self.native.control[7] = 1

@@ -110,13 +110,11 @@ def _held_ads_rearm_ready(camera: Any, pawn: Any, *, owner_module) -> bool:
     same_weapon = bool(request.get("same_weapon"))
     settled_equip = request.get("hybrid_settled_equip") is True
     if not (
-        handoff.get("held")
-        and mod._ads_active
+        mod._ads_active
         and mod._ads_route == "tps"
         and isinstance(ads, dict)
         and ads.get("phase") == "ads"
         and ads.get("transition") is None
-        and not handoff.get("latch_active")
         and (settled_equip or not handoff.get("reticle_rebind_active"))
         and (same_weapon or settled_equip or int(handoff.get("equip_ordinal", 0)) >= 2)
         and not mod._ads_press_intent.get("pending")
@@ -410,7 +408,6 @@ def _update_native_ads_origin_impl(camera: Any, pawn: Any, *, owner_module) -> N
         and weapon is not None
         and not (
             owner_module._ads_press_intent.get("pending")
-            or owner_module._ads_handoff.get("latch_active")
             or (
                 (
                     owner_module._slide_active
@@ -782,7 +779,6 @@ def _update_native_ownership_impl(*, owner_module) -> None:
         owner_module._ads_route == "tps"
         or owner_module._ads_tps_state is not None
         or owner_module._ads_press_intent.get("pending")
-        or owner_module._ads_handoff.get("held")
     ):
         _rearm_held_ads_if_ready(camera, pawn, owner_module=owner_module)
         owner_module._update_native_ads_origin(camera, pawn)
@@ -827,7 +823,6 @@ def _update_native_ownership_impl(*, owner_module) -> None:
         and owner_module._ads_route == "hip"
         and owner_module._ads_tps_state is None
         and not owner_module._ads_press_intent.get("pending")
-        and not owner_module._ads_handoff.get("held")
         and not owner_module._native_zoom_confirms_ads(pawn)
         and not (
             owner_module._ads_active

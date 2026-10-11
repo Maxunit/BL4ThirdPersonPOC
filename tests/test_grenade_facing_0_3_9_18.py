@@ -10,8 +10,12 @@ from BL4ThirdPersonPOC.omni.grenade_facing import GrenadeFacing, GrenadeHandoff 
 import test_fixes_0_3_9_12 as old_tests
 
 
+# All instances of one Unreal class share a single UClass object.
+SCRIPT_CLS = S(_path_name=lambda: gf.SCRIPT_CLASS, _get_address=lambda: 0x5C1)
+
+
 def script(name='1', pawn=None):
-    return S(Class=S(_path_name=lambda: gf.SCRIPT_CLASS), MyActor=pawn,
+    return S(Class=SCRIPT_CLS, MyActor=pawn,
              _path_name=lambda: '/Test/Offhand_' + name)
 
 

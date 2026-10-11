@@ -8,6 +8,7 @@ from types import SimpleNamespace as S
 from unittest.mock import patch
 
 import support
+from BL4ThirdPersonPOC import ads_handoff, ads_control
 import test_hybrid_fov_return_0_3_9_15 as return_tests
 from BL4ThirdPersonPOC import ads_events, ads_zoom_modifiers, ads_zoom_settings, camera_math, hybrid_ads, native_lifecycle
 
@@ -44,21 +45,13 @@ class HybridFixTests(unittest.TestCase):
         m._find_ads_collector = lambda weapon: self.collector
         m._ffyl_camera_active = lambda pawn, camera: False
         m._update_hybrid_ads_weapon_handoff = lambda pawn, camera, state: (
-            ads_events._update_hybrid_ads_weapon_handoff_impl(pawn, camera, state, owner_module=m))
+            ads_handoff._update_hybrid_ads_weapon_handoff_impl(pawn, camera, state, owner_module=m))
         m._ads_smoothstep = lambda alpha: alpha * alpha * (3 - 2 * alpha)
-        ads_events._reset_ads_handoff_debug_impl(owner_module=m)
+        ads_handoff._reset_ads_handoff_debug_impl(owner_module=m)
         m._ads_handoff.update(held=True, route_weapon=0xAA)
         m._ads_tps_state.update(weapon_address=0xAA, manager_address=0x30)
-        m._ads_write_zoom_latches = lambda pawn, **kw: ads_events._ads_write_zoom_latches_impl(
-            pawn, owner_module=m, **kw)
-        m._start_ads_handoff_latch_mask = lambda pawn, reason: ads_events._start_ads_handoff_latch_mask_impl(
-            pawn, reason, owner_module=m)
-        m._release_ads_handoff_latches = lambda pawn, reason: ads_events._release_ads_handoff_latches_impl(
-            pawn, reason, owner_module=m)
-        m._arm_late_tps_ads_equip_handoff = lambda obj, args: ads_events._arm_late_tps_ads_equip_handoff_impl(
+        m._arm_late_tps_ads_equip_handoff = lambda obj, args: ads_handoff._arm_late_tps_ads_equip_handoff_impl(
             obj, args, owner_module=m)
-        m._commit_ads_handoff_pose = lambda pawn, reason: ads_events._commit_ads_handoff_pose_impl(
-            pawn, reason, owner_module=m)
         m._camera_feature_options = dict(global_=None, categories={})
         m._camera_feature_options['global'] = S(value=1.)
 
@@ -69,8 +62,8 @@ class HybridFixTests(unittest.TestCase):
     def equip_callbacks(self):
         args = S(EventWeapon=self.incoming)
         for _ in range(2):
-            ads_events._hybrid_ads_weapon_equipped_pre_hook_impl(self.collector, args, None, None, owner_module=self.mod)
-            ads_events._hybrid_ads_weapon_equipped_post_hook_impl(self.collector, args, None, None, owner_module=self.mod)
+            ads_handoff._hybrid_ads_weapon_equipped_pre_hook_impl(self.collector, args, None, None, owner_module=self.mod)
+            ads_handoff._hybrid_ads_weapon_equipped_post_hook_impl(self.collector, args, None, None, owner_module=self.mod)
 
     def migrate(self, callbacks='before'):
         m = self.mod
@@ -80,10 +73,10 @@ class HybridFixTests(unittest.TestCase):
         self.incoming.CurrentState = 'Equipping'
         if callbacks == 'before':
             self.equip_callbacks()  # FPS route has no incoming TPS handoff yet.
-        ads_events._update_hybrid_ads_route_reconciliation_impl(owner_module=m)
+        ads_handoff._update_hybrid_ads_route_reconciliation_impl(owner_module=m)
         self.settle()
         self.camera.CameraCachePrivate.POV.FOV = 90.
-        ads_events._update_hybrid_ads_route_reconciliation_impl(owner_module=m)
+        ads_handoff._update_hybrid_ads_route_reconciliation_impl(owner_module=m)
         self.assertEqual(m._ads_route, 'tps')
         if callbacks == 'after':
             with patch.object(ads_zoom_modifiers, 'update'):
@@ -160,7 +153,7 @@ class HybridFixTests(unittest.TestCase):
                 self.assertTrue(m._ads_handoff['reticle_rebind_active'])
                 self.assertEqual(self.native_starts, [])
                 setattr(obj, name, before)
-        for key in ('latch_active', 'in_gap'):
+        for key in ('in_gap',):
             m._ads_handoff[key] = True
             self.rearm()
             self.assertEqual(self.native_starts, [])
@@ -201,9 +194,10 @@ class HybridFixTests(unittest.TestCase):
         self.assertTrue(self.mod._ads_handoff['reticle_rebind_active'])
         self.assertNotIn('hybrid_settled_equip', self.mod._ads_tps_state)
 
-    def test_release_and_cleanup_cancel_the_pending_request(self):
+    def test_native_exit_and_cleanup_cancel_the_pending_request(self):
         self.migrate()
-        ads_events._cleanup_ads_handoff_impl('ads_release', clear_held=True, owner_module=self.mod)
+        self.mod._ads_active = False
+        ads_handoff._cleanup_ads_handoff_impl('native_zoom_exit', owner_module=self.mod)
         self.rearm()
         self.assertEqual(self.native_starts, [])
         self.assertNotIn('native_tps_rearm', self.mod._ads_handoff)

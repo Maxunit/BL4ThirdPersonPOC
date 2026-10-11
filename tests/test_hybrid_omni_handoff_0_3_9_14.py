@@ -61,7 +61,7 @@ class HandoffTests(unittest.TestCase):
         self.o.collect_pose_diagnostics = False
         self.keys = dict(sprint=False, dash=False, crouch=False, jump=False,
                          fire=False, zoom=True, gadget=False)
-        self.o.inputs = S(begin_frame=lambda: None, snapshot=lambda pc: dict(self.keys),
+        self.o.inputs = S(begin_frame=lambda **kw: None, end_frame=lambda: None, snapshot=lambda pc: dict(self.keys),
                           revision=1, metadata=lambda: dict(revision=1), present_roles=set(self.keys))
         self.supervisor = S(child=self.o)
         setattr(self.mod, KEY, self.supervisor)
@@ -286,7 +286,11 @@ class HandoffTests(unittest.TestCase):
         self.enter()
         self.o.native.hook = object()
         self.o.native.validate = lambda: (_ for _ in ()).throw(RuntimeError('patch changed'))
-        self.o.frame(None, None, None, None)
+        # Owned native bytes are re-read round-robin: detection within one audit period.
+        for _ in range(self.o.NATIVE_AUDIT_PERIOD):
+            if self.stops:
+                break
+            self.o.frame(None, None, None, None)
         self.assertEqual(self.stops, ['SPECIAL_HANDOFF_FAILED'])
         self.assertFalse(self.o.active)
         self.assert_controls_off()

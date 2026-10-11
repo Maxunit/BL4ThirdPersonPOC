@@ -5,9 +5,11 @@ facing after a measured ThrowGadget only while the same owned offhand script
 remains. No elapsed-time admission, release grace or new physical bindings.
 """
 from time import monotonic
+import unrealsdk
 from unrealsdk import hooks, find_object
 from unrealsdk.unreal import WeakPointer
 from .common import log as logging, TAG
+from . import hitch
 
 THROW_FUNCTION = '/Script/OakGame.OakCharacter:ThrowGadget'
 SCRIPT_CLASS = '/Game/PlayerCharacters/_Shared/Tricks/Skills/Script_LTrick_HandleOffhand.Script_LTrick_HandleOffhand_C'
@@ -115,14 +117,48 @@ class GrenadeFacing:
     def now(self):
         return monotonic() - self.session.started
 
+    def script_class(self):
+        """Measured offhand script class as weak identity; None keeps path checks."""
+        cached = getattr(self, 'script_class_ref', None)
+        if cached is not None:
+            live = cached[0]()
+            if live is not None and int(live._get_address()) == cached[1]:
+                return live
+            self.script_class_ref = None
+        if getattr(self, 'script_class_lookups', 0) >= 1 and cached is None:
+            return None
+        self.script_class_lookups = getattr(self, 'script_class_lookups', 0) + 1
+        try:
+            cls = unrealsdk.find_class(SCRIPT_CLASS)
+        except READ_ERRORS:
+            return None
+        if cls is None or str(cls._path_name()) != SCRIPT_CLASS:
+            return None
+        self.script_class_ref = (WeakPointer(cls), int(cls._get_address()))
+        return cls
+
     def scripts(self, pawn):
         rows = pawn.TrickData.InstancedScripts
         if not 0 <= len(rows) <= 32:
             raise RuntimeError('Offhand script list outside diagnostic bound')
-        return [obj for obj in rows if obj is not None
-                and str(obj.Class._path_name()) == SCRIPT_CLASS and obj.MyActor == pawn]
+        # Class identity instead of a path string per script and update; the
+        # path check remains when the class cannot be resolved.
+        cls = self.script_class()
+        if cls is not None:
+            return [obj for obj in rows if obj is not None and obj.Class == cls and obj.MyActor == pawn]
+        found = [obj for obj in rows if obj is not None
+                 and str(obj.Class._path_name()) == SCRIPT_CLASS and obj.MyActor == pawn]
+        if found:
+            # First live instance proves the class; later updates compare identity.
+            cls = found[0].Class
+            self.script_class_ref = (WeakPointer(cls), int(cls._get_address()))
+        return found
 
     def install(self):
+        with hitch.step('install.grenade'):
+            return self._install()
+
+    def _install(self):
         try:
             function = find_object('Function', THROW_FUNCTION)
             if function is None or tuple(function._properties()):

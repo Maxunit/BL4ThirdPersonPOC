@@ -13,6 +13,7 @@ update cadence) and ``begin_frame`` so one callback evaluates key state once.
 """
 import math
 from copy import copy
+import unrealsdk
 from unrealsdk.unreal import WeakPointer
 
 # Semantic action assets observed in the SDK inventory. These are actions,
@@ -43,7 +44,35 @@ SKIPPABLE_ROLES = ('gadget', 'carry_throw')
 MAX_MAPPINGS = 512
 # Update cadence for the full scan when nothing else forces it. Counted in
 # owned updates, not elapsed time. Mapping-count changes refresh immediately.
-REFRESH_INTERVAL_UPDATES = 30
+REFRESH_INTERVAL_UPDATES = 300
+
+
+# Key reads per evaluated FKey. A plain button only has a pressed state and a
+# pure axis key only an analog value; button-axis keys (gamepad triggers) and
+# anything that cannot be classified keep both reads (previous behaviour).
+KEY_DIGITAL, KEY_ANALOG, KEY_BOTH = 'digital', 'analog', 'both'
+CLASSIFY_ERRORS = (AttributeError, RuntimeError, TypeError, ValueError)
+
+
+def input_library():
+    """KismetInputLibrary CDO for the static Key_* queries, or None."""
+    try:
+        cls = unrealsdk.find_class('/Script/Engine.KismetInputLibrary')
+        return None if cls is None else cls.ClassDefaultObject
+    except CLASSIFY_ERRORS:
+        return None
+
+
+def key_kind(key, library):
+    """Classify one SDK-owned FKey copy once per refresh; unknown keeps both reads."""
+    if library is None:
+        return KEY_BOTH
+    try:
+        if bool(library.Key_IsButtonAxis(key)):
+            return KEY_BOTH
+        return KEY_ANALOG if bool(library.Key_IsAnalog(key)) else KEY_DIGITAL
+    except CLASSIFY_ERRORS:
+        return KEY_BOTH
 
 
 def reflected_fields(cls):
@@ -116,6 +145,7 @@ class NativeBindings:
         self.controller_ref = WeakPointer(controller)
         self.player_input_ref = WeakPointer(player_input)
         self.bindings = {role: [] for role in ROLES}
+        self.key_kinds = {role: [] for role in ROLES}
         self.present_roles = frozenset()
         self.skipped_optional = 0
         self.mapping_count = None
@@ -127,15 +157,26 @@ class NativeBindings:
         # Per-callback snapshot cache; disabled until begin_frame() is used.
         self.frame_cache_enabled = False
         self.frame_snapshot = None
+        self.coherent_callback = False
 
     def matches(self, controller):
         pc, player_input = self.controller_ref(), self.player_input_ref()
         return pc is not None and player_input is not None and pc == controller and pc.PlayerInput == player_input
 
-    def begin_frame(self):
+    def begin_frame(self, *, coherent=False):
         """Start one owned callback: key state is evaluated at most once until the next call."""
         self.frame_cache_enabled = True
         self.frame_snapshot = None
+        # Only the owned gameplay callback opts in. Its consumers use one
+        # intent snapshot; mapping changes are admitted on the next callback.
+        # Weak input/controller ownership is still checked on every access.
+        self.coherent_callback = coherent
+
+    def end_frame(self):
+        """Release scalar intent storage at the end of an owned callback."""
+        self.frame_cache_enabled = False
+        self.frame_snapshot = None
+        self.coherent_callback = False
 
     def maybe_refresh(self, require_complete=False, force=False):
         """Bounded per-update refresh with the same fail-closed owner/completeness rules."""
@@ -151,6 +192,11 @@ class NativeBindings:
         return self.complete
 
     def refresh(self, require_complete=False):
+        from .omni import hitch
+        with hitch.step('input.mapping_scan'):
+            return self._refresh(require_complete)
+
+    def _refresh(self, require_complete=False):
         pc, player_input = self.controller_ref(), self.player_input_ref()
         if pc is None or player_input is None or pc.PlayerInput != player_input:
             raise RuntimeError('Configured input owner changed; explicit rebind required')
@@ -158,6 +204,8 @@ class NativeBindings:
         if not 0 <= len(mappings) <= MAX_MAPPINGS:
             raise RuntimeError('Enhanced action mapping count outside bound')
         bindings = {role: [] for role in ROLES}
+        kinds = {role: [] for role in ROLES}
+        library = input_library()
         seen_roles = set()
         skipped_optional = 0
         signature = []
@@ -209,6 +257,7 @@ class NativeBindings:
                 if owned_key is key or str(owned_key.KeyName) != name:
                     raise RuntimeError('Configured key copy differs: ' + asset)
                 bindings[role].append(owned_key)
+                kinds[role].append(key_kind(owned_key, library))
         complete = all(role in seen_roles for role in REQUIRED_ROLES)
         if require_complete and not complete:
             missing = ', '.join(role for role in REQUIRED_ROLES if role not in seen_roles)
@@ -218,6 +267,7 @@ class NativeBindings:
             self.signature = frozen
             self.revision += 1
         self.bindings = bindings
+        self.key_kinds = kinds
         self.present_roles = frozenset(seen_roles)
         self.skipped_optional = skipped_optional
         self.mapping_count = len(mappings)
@@ -230,19 +280,26 @@ class NativeBindings:
     def snapshot(self, controller):
         if not self.matches(controller):
             raise RuntimeError('Configured input snapshot owner changed')
+        if self.coherent_callback and self.frame_snapshot is not None:
+            return dict(self.frame_snapshot)
         if self.mapping_count != len(self.player_input_ref().EnhancedActionMappings):
             self.refresh()
         if self.frame_cache_enabled and self.frame_snapshot is not None:
             return dict(self.frame_snapshot)
         result = {}
+        kinds = getattr(self, 'key_kinds', {})
         for role, keys in self.bindings.items():
             active = False
-            for key in keys:
-                digital = bool(controller.IsInputKeyDown(key))
-                analog = float(controller.GetInputAnalogKeyState(key))
-                if not math.isfinite(analog):
-                    raise RuntimeError('Nonfinite configured action value: ' + role)
-                active = active or digital or abs(analog) > 0.05
+            role_kinds = kinds.get(role, ())
+            for index, key in enumerate(keys):
+                kind = role_kinds[index] if index < len(role_kinds) else KEY_BOTH
+                if kind != KEY_ANALOG:
+                    active = bool(controller.IsInputKeyDown(key)) or active
+                if kind != KEY_DIGITAL:
+                    analog = float(controller.GetInputAnalogKeyState(key))
+                    if not math.isfinite(analog):
+                        raise RuntimeError('Nonfinite configured action value: ' + role)
+                    active = active or abs(analog) > 0.05
             result[role] = active
         if self.frame_cache_enabled:
             self.frame_snapshot = dict(result)
@@ -257,6 +314,7 @@ class NativeBindings:
                 'key_storage': 'SDK-owned copies of current mapped FKeys',
                 'bound_keys': {role: [str(key.KeyName) for key in keys]
                                for role, keys in self.bindings.items()},
+                'key_reads': {role: list(kinds) for role, kinds in getattr(self, 'key_kinds', {}).items()},
                 'semantics': 'configured-key intent; native callbacks decide admission'}
 
 

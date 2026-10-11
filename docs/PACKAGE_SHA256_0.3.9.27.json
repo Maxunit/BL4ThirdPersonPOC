@@ -1,0 +1,21 @@
+{
+  "version": "0.3.9.27",
+  "tests": {
+    "total": 429,
+    "passed": 425,
+    "skipped": 4
+  },
+  "sdkmod_sha256": "420e5cd12bc4b43e67f4068876369e6a364e80d8222b44343236aced8cd62ae8",
+  "sdkmod_source_byte_match": true,
+  "unchanged_native_and_build_modules": 16,
+  "production_changes": [
+    "BL4ThirdPersonPOC/__init__.py",
+    "BL4ThirdPersonPOC/input_bindings.py",
+    "BL4ThirdPersonPOC/omni/visual_guard.py",
+    "BL4ThirdPersonPOC/omni/session.py",
+    "BL4ThirdPersonPOC/omni/profiler.py",
+    "BL4ThirdPersonPOC/omni/diagnostics.py",
+    "BL4ThirdPersonPOC/omni/animation.py"
+  ],
+  "in_game_performance_validation": "pending"
+}

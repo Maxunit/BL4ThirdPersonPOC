@@ -12,6 +12,8 @@ from .carry_throw_handoff import CarryThrowHandoff
 from .throw_handoff import FRESH_MONTAGE_SECONDS, ThrowHandoff
 from .native_fire_activity import NativeFireActivity
 from .weapon_fire_diagnostics import WeaponFireDiagnostics
+from .visual_guard import validate_visual
+from . import hitch
 
 # Exceptions a native state read can raise; anything else is a real defect.
 NATIVE_READ_ERRORS = (RuntimeError, OSError, ValueError, struct.error)
@@ -45,6 +47,9 @@ def observe_hybrid_scope(session, pc):
 
 class AnimationMixin:
 
+    def validate_visual(self, *, capture=False):
+        return validate_visual(self, capture=capture)
+
     def _visual_bind_visual(self):
         mesh = self.bound()[1].Mesh
         if mesh is None:
@@ -56,6 +61,12 @@ class AnimationMixin:
         count = int(mesh.GetNumBones())
         if not 1 <= count <= 512:
             raise RuntimeError('Skeleton bone count outside diagnostic bounds')
+        if not getattr(self, 'collect_pose_diagnostics', True):
+            # The later player bind clears the selection in every mode; the full
+            # catalog (one SDK call per bone) is diagnostic report data only.
+            self.bones = []
+            self.report['visual_binding'] = {'mesh': describe(mesh), 'bone_count': count, 'all_bone_names': [], 'selected_bones': [], 'selection_note': 'Production bind: bone catalog only with pose diagnostics.'}
+            return
         names = list(bone_names('visual', self, mesh, count))
         groups = (('root', lambda n: 'root' in n or n in ('origin', 'base')), ('pelvis', lambda n: 'pelvis' in n or 'hips' in n or n == 'hip'), ('spine', lambda n: 'spine' in n), ('neck', lambda n: 'neck' in n), ('head', lambda n: 'head' in n), ('thigh', lambda n: 'thigh' in n))
         chosen = []
@@ -82,8 +93,13 @@ class AnimationMixin:
                 raise RuntimeError('Visual capture requires owned game thread')
             if self.mesh_ref is None:
                 self.bind_visual()
-            row = self.visual()
-            self.report['visual_samples'].append(row)
+            if self.collect_pose_diagnostics:
+                row = self.visual()
+                self.report['visual_samples'].append(row)
+            else:
+                # Gameplay still validates the bound animation and AimOffset.
+                # Rotations, object descriptions and pose rows are diagnostics.
+                self.validate_visual()
         except Exception as exc:
             self.report['errors'].append(repr(exc)[:500])
             try:
@@ -238,6 +254,11 @@ class AnimationMixin:
         return hold or grenade_hold or carry_hold
 
     def read_combat(self):
+        # One combat observation per owned callback. Clip-swap updates used to
+        # evaluate it twice, which advanced the handoff state machines (rising
+        # edges, NO_REQUEST_SAMPLES) twice per update while moving.
+        if getattr(self, '_callback_scope', False) and getattr(self, '_callback_combat_read', False):
+            return
         if not self.updates.is_game_thread():
             raise RuntimeError('Combat observation requires owned game thread')
         pc, pawn, camera, movement = self.bound()
@@ -248,7 +269,8 @@ class AnimationMixin:
             raise RuntimeError('Combat animation ownership changed')
         weapon = camera.CameraModeInputs.Weapon
         weapon_state = str(weapon.CurrentState) if weapon is not None else 'None'
-        combat = {'ads_active': bool(self.mod._ads_active), 'fire_intent': self.inputs.snapshot(pc)['fire'], 'zoom_intent': self.inputs.snapshot(pc)['zoom'], 'animation_is_firing': bool(anim.bIsFiring), 'weapon_state': weapon_state, 'animation_is_reloading': bool(anim.bIsReloading)}
+        actions = self.inputs.snapshot(pc)
+        combat = {'ads_active': bool(self.mod._ads_active), 'fire_intent': actions['fire'], 'zoom_intent': actions['zoom'], 'animation_is_firing': bool(anim.bIsFiring), 'weapon_state': weapon_state, 'animation_is_reloading': bool(anim.bIsReloading)}
         handoff = getattr(self, 'sprint_fire_handoff', None)
         if handoff is None:
             handoff = self.sprint_fire_handoff = SprintFireHandoff()
@@ -299,6 +321,8 @@ class AnimationMixin:
         if combat != self.combat:
             self.report['combat_transitions'].append({'t': monotonic() - self.started, **combat})
         self.combat = combat
+        if getattr(self, '_callback_scope', False):
+            self._callback_combat_read = True
 
     def _combat_bind_visual(self):
         self._aim_binding_bind_visual()
@@ -315,13 +339,13 @@ class AnimationMixin:
                 del rows[:len(rows) - MAX_SAMPLES + 1]
         try:
             self.read_combat()
-            if self.idle_update.hook is not None:
+            if self.idle_update.hook is not None and self.native_audit_due(3):
                 self.idle_update.validate()
-            if self.idle_native.hook is not None:
+            if self.idle_native.hook is not None and self.native_audit_due(2):
                 self.idle_native.validate()
             self.idle_native.control[0] = int(self.impulse_index is not None and (not self.combat['active']))
             self.idle_update.control[0] = self.idle_native.control[0]
-            if self.aim_native.hook is not None:
+            if self.aim_native.hook is not None and self.native_audit_due(1):
                 self.aim_native.validate()
             if self.impulse_index is not None:
                 elapsed = monotonic() - self.started - self.follow_started_t
@@ -385,13 +409,15 @@ class AnimationMixin:
             self.blend_node()
             self.report['lean_blend_binding'] = {'node': self.BLEND_NODE, 'offset': self.BLEND_OFFSET, 'lean_player_offset': self.LEAN_OFFSET, 'additive_link_pointer_matches': True}
 
-    def blend_node(self):
+    def blend_node(self, verify_link=True):
         anim = self.anim_ref()
         mesh = self.mesh_ref()
         if anim is None or mesh is None or self.bound()[1].Mesh != mesh or (mesh.AnimScriptInstance != anim):
             raise RuntimeError('Lean blend animation ownership changed')
         if not self.blend_layout_ready:
             raise RuntimeError('Lean blend layout not validated')
+        if not verify_link:
+            return getattr(anim, self.BLEND_NODE)
         address = int(anim._get_address())
         raw = self.mod._native_read(address + self.BLEND_OFFSET + 40, 8)
         self.report['native_reads'] += 1
@@ -426,7 +452,7 @@ class AnimationMixin:
                 rows = self.report[name]
                 if len(rows) >= self.LIVE_LIMIT:
                     del rows[:len(rows) - self.LIVE_LIMIT + 1]
-            node = self.blend_node()
+            node = self.blend_node(verify_link=self.native_audit_due(10))
             if self.blend_original is None:
                 self.blend_original = bool(node.bInvertAlpha)
                 if not self.blend_original:
@@ -543,7 +569,8 @@ class AnimationMixin:
         self.validate_getter()
         weapon, weapon_state_before = self.air_clip_weapon_binding(anim)
         self.report['getter_calls'] += 1
-        asset = anim.GetAnimationFromTag(forward.AnimAssetKey)
+        with hitch.step('clips.air.GetAnimationFromTag'):
+            asset = anim.GetAnimationFromTag(forward.AnimAssetKey)
         if self.clip_anim() != anim:
             raise RuntimeError('Animation ownership changed during getter')
         after_weapon, weapon_state_after = self.air_clip_weapon_binding(anim)
@@ -634,7 +661,8 @@ class AnimationMixin:
         self.validate_getter()
         weapon, weapon_state_before = self.air_clip_weapon_binding(anim)
         self.report['getter_calls'] += 1
-        asset = anim.GetAnimationFromTag(forward.AnimAssetKey)
+        with hitch.step('clips.ground.GetAnimationFromTag'):
+            asset = anim.GetAnimationFromTag(forward.AnimAssetKey)
         if self.ground_clip_anim() != anim:
             raise RuntimeError('Animation ownership changed during getter')
         after_weapon, weapon_state_after = self.air_clip_weapon_binding(anim)

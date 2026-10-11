@@ -10,6 +10,8 @@ from .inputs import NativeBindings
 from .session import GameplaySession
 from .rebind_cache import RebindCache
 from .vehicle_handoff import VehicleHandoff, allow_exit_air
+from .profiler import root_span
+from . import hitch
 
 class LifecycleSupervisor:
     """Own restart/widget lifecycle subscriptions; retire complete native sessions before restart."""
@@ -73,14 +75,17 @@ class LifecycleSupervisor:
         self.event('WAITING_ON_FOOT')
 
     def retire(self, reason):
+        from . import profiler
+        profiler.cancel(self.mod, "SESSION_RETIRED_" + str(reason))
         self.reset_candidate()
         if self.child is None:
             return
         child = self.child
-        try:
-            child.disable_special_controls()
-        finally:
-            child.finish(reason)
+        with hitch.step('session.retire'):
+            try:
+                child.disable_special_controls()
+            finally:
+                child.finish(reason)
         if any((owner.hook is not None for owner in child.owners())):
             raise RuntimeError('Retired gameplay native hooks remain')
         if any((trace.hook is not None for action, rva, owner, trace in child.entries)):
@@ -147,6 +152,8 @@ class LifecycleSupervisor:
         if self.active and self.vehicle is not None:
             self.vehicle.restart('POST', obj, args)
 
+    @hitch.root("vehicle")
+    @root_span("callback.vehicle")
     def vehicle_frame(self, obj, args, ret, func):
         if not self.active or not self.updates.is_game_thread():
             return
@@ -201,10 +208,13 @@ class LifecycleSupervisor:
             return (None, 'WAITING_LIFETIMES')
         return ((tuple((int(o._get_address()) for o in objects)), refs), 'ON_FOOT_READY')
 
+    @hitch.root("lifecycle")
+    @root_span("callback.lifecycle")
     def frame(self, obj, args, ret, func):
         if not self.active or self.busy or (not self.updates.is_game_thread()):
             return
         self.busy = True
+        scoped = None
         try:
             self.frames += 1
             if not self.mod._third_person_enabled:
@@ -215,6 +225,8 @@ class LifecycleSupervisor:
                     self.event('WAITING_TPS_ENABLED')
                 return
             if self.child is not None:
+                scoped = self.child
+                scoped.open_callback_scope()
                 pc, pawn, camera, movement = self.child.bound()
                 normal_inputs = not bool(pc.bShowMouseCursor) and (not any((bool(getattr(self.mod, k, False)) for k in ('_vehicle_camera_active', '_shop_camera_active', '_ladder_active')))) and (int(movement.MovementMode) in (1, 3)) and (str(camera.GetActorCameraMode(pawn)) == 'ThirdPerson')
                 # Full mapping scans are bounded: count changes, the return to
@@ -263,7 +275,8 @@ class LifecycleSupervisor:
             self.child = child
             self.sequence += 1
             child.report['lifecycle_session_sequence'] = self.sequence
-            child.install()
+            with hitch.step('session.install'):
+                child.install()
             if self.vehicle is not None and self.vehicle.air is not None and self.vehicle.air.ticket is not None:
                 with self.rebind_cache.transaction(child):
                     self.vehicle.air.air_start(child)
@@ -277,6 +290,8 @@ class LifecycleSupervisor:
         except Exception as exc:
             self.fail('widget_pre', exc)
         finally:
+            if scoped is not None:
+                scoped.close_callback_scope()
             self.busy = False
 
     def pause_perspective(self):
@@ -310,6 +325,7 @@ class LifecycleSupervisor:
             except Exception as exc:
                 failures.append('vehicle: ' + repr(exc))
         self.report['rebind_optimization'] = dict(self.rebind_cache.totals)
+        self.report['hitches'] = hitch.snapshot()
         self.rebind_cache.clear()
         if self.child is not None:
             try:
@@ -347,6 +363,7 @@ class LifecycleSupervisor:
     def save_report(self, reason='MANUAL_REPORT'):
         """Write the current bounded state without stopping (console 'report')."""
         self.report['rebind_optimization'] = dict(self.rebind_cache.totals)
+        self.report['hitches'] = hitch.snapshot()
         self.report['vehicle_native_patches'] = 0 if self.vehicle is None else self.vehicle.patch_count()
         if self.vehicle is not None:
             self.report['vehicle_handoff'] = self.vehicle.report

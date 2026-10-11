@@ -1,4 +1,4 @@
-"""Capture explicit F10 observations of the current held-ADS handoff.
+"""Capture explicit F10 observations of native ADS and presentation handoff.
 
 Reads the local runtime and publisher's validated reticle snapshot into a JSON
 report. No extra hook, model publication or native patch is added. This is a
@@ -50,11 +50,11 @@ def capture(mod):
             pending=bool(pawn.ZoomState.bPendingZoom),
             ticking=bool(pawn.ZoomState.bTickingZoom),
         )
+        report["ads_control"] = mod._ads_controller.snapshot()
         report["handoff"] = {
             k: mod._ads_handoff.get(k)
             for k in (
                 "held",
-                "latch_active",
                 "incoming_weapon",
                 "route_weapon",
                 "collector_address",
@@ -87,6 +87,8 @@ def capture(mod):
                     "transition",
                     "zoom_multiplier",
                     "hybrid_settled_equip",
+                    "reticle_last_event",
+                    "reticle_last_status",
                 )
             }
         )

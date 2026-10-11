@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 from time import monotonic
 import ctypes
 import math
+import threading
+from contextlib import nullcontext
 from unrealsdk import hooks, find_enum, find_object
 from .common import log as logging
 from unrealsdk.unreal import WeakPointer
@@ -24,6 +26,8 @@ from .air import AirMixin
 from .slide import SlideMixin
 from .slam import SlamMixin
 from .diagnostics import DiagnosticsMixin
+from .profiler import root_span
+from . import hitch
 
 class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, SlideMixin, SlamMixin, DiagnosticsMixin):
     INPUT_NAMES = ('ForwardDirection', 'RightDirection', 'UpDirection', 'Direction', 'ReverseDirection', 'AccelDirection', 'Speed2D', 'Speed2DRaw', 'AimYaw', 'AimPitch', 'AimEnableAlpha', 'HeadEnableAlpha', 'bIsMoving2D', 'bIsMovingOrRotating2D', 'bIsThirdPersonMesh')
@@ -289,8 +293,15 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
             for name in methods:
                 if not callable(getattr(obj, name, None)):
                     raise RuntimeError('SDK getter unavailable: ' + name)
-        self.inputs = NativeBindings(pc)
-        self.inputs.refresh(require_complete=True)
+        # The supervisor's on-foot gate refreshed this controller's mappings with
+        # require_complete in the last updates (count changes refresh at once).
+        # Reuse that reader instead of a second full scan in the bind update.
+        shared = getattr(getattr(self, 'lifecycle_supervisor', None), 'input_owner', None)
+        if shared is not None and shared.matches(pc) and shared.complete:
+            self.inputs = shared
+        else:
+            self.inputs = NativeBindings(pc)
+            self.inputs.refresh(require_complete=True)
         self.report['optional_field_errors'] = {}
         if self.updates.has_hook(*self.spec):
             raise RuntimeError('Observer hook identifier already occupied')
@@ -392,8 +403,14 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
         count = int(mesh.GetNumBones())
         if not 1 <= count <= 512:
             raise RuntimeError('Head skeleton count outside bounds')
-        names = set(bone_names('head', self, mesh, count))
-        if not all((n in names for n in self.BONE_NAMES)):
+        with hitch.step('install.bones'):
+            if self.collect_pose_diagnostics or not callable(getattr(mesh, 'GetBoneIndex', None)):
+                # Full catalog (one SDK call per bone) only for pose diagnostics.
+                names = set(bone_names('head', self, mesh, count))
+                missing = [n for n in self.BONE_NAMES if n not in names]
+            else:
+                missing = [n for n in self.BONE_NAMES if not 0 <= int(mesh.GetBoneIndex(n)) < count]
+        if missing:
             raise RuntimeError('Reviewed head/spine bones missing')
         for name in self.AIM_NODES:
             node = getattr(anim, name)
@@ -407,6 +424,7 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
         self.head_anim = WeakPointer(anim)
         self.report['head_pose_binding'] = dict(mesh=describe(mesh), animation=describe(anim), bones=list(self.BONE_NAMES), aim_nodes=list(self.AIM_NODES))
         self._slide_state_install()
+        self.staged_bind = True
 
     def disable_handoff_overrides(self):
         self.aim_native.crouch_control[0] = 0
@@ -460,12 +478,7 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
 
     def _special_paused_special_frame(self, obj, args, ret, func):
         self.disable_special_controls()
-        for owner in self.owners():
-            if owner.hook is not None:
-                owner.validate()
-        for action, rva, owner, trace in self.entries:
-            if trace.hook is not None:
-                trace.validate()
+        self.audit_owners(entries=True)
         self.discard_special_input()
         self.read_combat()
         self._sample_frame(obj, args, ret, func)
@@ -487,9 +500,10 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
             if not self.mod._third_person_enabled and self.lifecycle_managed:
                 self.lifecycle_supervisor.pause_perspective()
                 return
-            context = self.state_context()
+            objects = self.bound()
+            pc, pawn, camera, movement = objects
+            context = self.state_context(objects)
             self.report['last_lifecycle_context'] = context
-            pc, pawn, camera, movement = self.bound()
             if not context['third_person']:
                 self.save_state_edge(context, 'STOP_TPS_OR_UI')
                 self.finish('TPS_OR_UI_CHANGED')
@@ -598,6 +612,112 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
         self.restore_ground_clips()
         self._clip_lookup_prepare_air_cycle(sample, attempt)
 
+    # One-off binding work of a new session. Formerly all of it ran inside the
+    # first RUN update (one long frame on load, respawn and vehicle exit). Now
+    # at most one step runs per steady RUN update, in the former order; the
+    # pipeline starts once every step is done. Paused/special updates keep their
+    # original handling. The lazy sites in the pipeline call the same methods.
+    BIND_STEPS = ('slide', 'vector', 'visual', 'sprint', 'route', 'root', 'entries')
+
+    def pending_bind_step(self):
+        ready = dict(slide=self.slide_ready, vector=self.vector_ready, visual=self.mesh_ref is not None,
+                     sprint=self.sprint_ready, route=self.route_ready, root=self.ready,
+                     entries=self.entry_ready)
+        return next((name for name in self.BIND_STEPS if not ready[name]), None)
+
+    def bind_step(self, pc, pawn, camera, movement):
+        """Run one pending bind step on a RUN update; True when this update was used."""
+        name = self.pending_bind_step()
+        if name is None:
+            self.staged_bind = False
+            return False
+        if self.classify_handoff(pc, pawn, camera, movement)[0] != 'RUN':
+            return False
+        cache = getattr(getattr(self, 'lifecycle_supervisor', None), 'rebind_cache', None)
+        try:
+            with (cache.transaction(self) if cache is not None else nullcontext()):
+                getattr(self, '_bind_' + name)()
+        except Exception as exc:
+            self.report['errors'].append('Bind step ' + name + ': ' + repr(exc)[:500])
+            try:
+                self.finish('BIND_' + name.upper() + '_FAILED')
+            except Exception as cleanup:
+                logging.error(TAG + ' STOP_FAILED rerun to retry ' + repr(cleanup))
+            return True
+        steps = self.report.setdefault('bind_steps', [])
+        steps.append(name)
+        return True
+
+    def _bind_slide(self):
+        with hitch.step('bind.slide'):
+            self.apply_slide()
+
+    def _bind_vector(self):
+        with hitch.step('bind.vector'):
+            self.vector_trace.install()
+            self.vector_ready = True
+
+    def _bind_visual(self):
+        with hitch.step('bind.visual'):
+            self.bind_visual()
+
+    def _bind_sprint(self):
+        with hitch.step('bind.sprint'):
+            self.direction_trace.install()
+            self.index_trace.install()
+            self.sprint_ready = True
+
+    def _bind_route(self):
+        with hitch.step('bind.route'):
+            self.prepare_native()
+            self.route.install()
+            self.dash_branch.install()
+            self.control[0] = 1
+            self.route_ready = True
+        self.event('MANUAL_INPUT_READY')
+
+    def _bind_root(self):
+        with hitch.step('bind.root'):
+            self.native.install()
+            self.ready = True
+
+    def _bind_entries(self):
+        with hitch.step('bind.entries'):
+            for action, rva, o, t in self.entries:
+                o.base = self.base
+                o.control[1] = self.handler_address
+                o.control[2] = threading.get_native_id()
+                o.control[4] = ctypes.addressof(o.buffer)
+                o.control[7] = self.movement_address
+                t.install()
+            self.entry_ready = True
+            self.report['native_circle_entry_installed'] = True
+        logging.warning(TAG + ' NATIVE_ENTRY_READY Action_Crouch; manual-stop combined test')
+
+    # Steady RUN frames re-read the owned native patch/vtable bytes round-robin:
+    # at most two audit slots per update, every slot within NATIVE_AUDIT_PERIOD
+    # updates. Object identity (bound(), anim address, handler) is still checked
+    # every update; resume, rebind and the first update audit every slot.
+    NATIVE_AUDIT_PERIOD = 6
+
+    def native_audit_due(self, slot):
+        if getattr(self, '_audit_full', True):
+            return True
+        return getattr(self, '_audit_tick', 0) % self.NATIVE_AUDIT_PERIOD == slot % self.NATIVE_AUDIT_PERIOD
+
+    def audit_owners(self, entries=False):
+        """Blanket per-update owner checks of paused paths, on the same round-robin."""
+        slots = ((0, self.native), (1, self.aim_native), (2, self.idle_native), (3, self.idle_update),
+                 (4, self.route), (5, self.dash_branch), (6, self.direction_trace),
+                 (7, self.index_trace), (8, self.vector_trace))
+        for slot, owner in slots:
+            if owner.hook is not None and self.native_audit_due(slot):
+                owner.validate()
+        if entries and self.native_audit_due(9):
+            for action, rva, owner, trace in self.entries:
+                if trace.hook is not None:
+                    trace.validate()
+
     def disable_special_controls(self):
         self.disarm_ground_vector()
         try:
@@ -605,17 +725,24 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
         finally:
             self._special_disable_special_controls()
 
+    @hitch.root("gameplay")
+    @root_span("callback.gameplay")
     def frame(self, obj, args, ret, func):
         if not self.active or self.busy or (not self.updates.is_game_thread()):
             return
+        input_scope = None
+        self.open_callback_scope()
         try:
             if not self.mod._third_person_enabled and self.lifecycle_managed:
                 self.lifecycle_supervisor.pause_perspective()
                 return
             pc, pawn, camera, movement = self.bound()
             # One configured-key evaluation per owned callback.
-            self.inputs.begin_frame()
-            dash = bool(pawn.IsCharacterDashing())
+            input_scope = self.inputs
+            input_scope.begin_frame(coherent=True)
+            if getattr(self, 'staged_bind', False) and self.bind_step(pc, pawn, camera, movement):
+                return
+            dash = self.is_dashing(pawn)
             self.disarm_ground_vector()
             if self.ground_clip_originals:
                 anim = self.ground_clip_anim()
@@ -623,7 +750,7 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
                 changed = self.ground_clip_weapon_ref is None or self.ground_clip_weapon_ref() != weapon
                 forward = self.ground_clip_forward_ref()
                 replaced = any((getattr(anim, n).Sequence != forward for n, _, _, _ in self.ground_clip_originals))
-                handoff = int(movement.MovementMode) != 1 or int(movement.CustomMovementMode) != 0 or bool(pc.bShowMouseCursor) or bool(self.mod._vehicle_camera_active) or bool(self.mod._slide_active) or bool(self.mod._ads_active) or bool(pawn.bIsCrouched) or (str(camera.GetActorCameraMode(pawn)) != 'ThirdPerson')
+                handoff = int(movement.MovementMode) != 1 or int(movement.CustomMovementMode) != 0 or bool(pc.bShowMouseCursor) or bool(self.mod._vehicle_camera_active) or bool(self.mod._slide_active) or bool(self.mod._ads_active) or bool(pawn.bIsCrouched) or (self.camera_mode(pawn, camera) != 'ThirdPerson')
                 self.read_combat()
                 if changed or replaced or handoff or self.combat['active'] or (self.ground_dash_seen and (not dash)):
                     self.restore_ground_clips()
@@ -633,12 +760,19 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
             if dash and int(movement.MovementMode) == 1 and self.ground_clip_originals:
                 self.ground_dash_seen = True
             self._ground_pose_frame(obj, args, ret, func)
+            self._audit_tick = getattr(self, '_audit_tick', 0) + 1
+            self._audit_full = False
         except Exception as exc:
             self.report['errors'].append('Combined ground gameplay: ' + repr(exc)[:500])
             try:
                 self.finish('COMBINED_GROUND_FAILED')
             except Exception as cleanup:
                 logging.error(TAG + ' STOP_FAILED rerun to retry ' + repr(cleanup))
+
+        finally:
+            self.close_callback_scope()
+            if input_scope is not None:
+                input_scope.end_frame()
 
     def restore_body_rotation(self):
         # No snapback to the yaw captured when following started (possibly
@@ -652,6 +786,8 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
 
     def finish(self, reason):
         self.active = False
+        # Any later bound() in the unwinding callback validates fully again.
+        self.close_callback_scope()
         failures = []
 
         def attempt(label, operation, sdk_write=False):

@@ -75,6 +75,8 @@ def fake_mod(route='tps', scoped_weapon=0xAA):
     mod._native_stop = lambda reason: mod.native_stops.append(reason) or True
     mod._cleanup_ads_handoff = lambda reason: mod._ads_handoff.update(route_weapon=0, route_pending=None)
     mod._ads_zoom_fields = lambda pawn: 'zoom_state=2'
+    mod.reticle_hides = []
+    mod._hide_hybrid_tps_reticle = lambda identity: mod.reticle_hides.append(identity) or 'hidden'
     mod._classify_ads_weapon = lambda w: ('sniper_rifle', 'test', 'evidence')
     return mod, camera, weapon
 
@@ -142,6 +144,14 @@ class CameraPositionTests(HybridBase):
 
 
 class ScopeTests(HybridBase):
+    def test_toggle_ads_can_switch_scope_after_physical_release(self):
+        mod, camera, _ = fake_mod()
+        mod._ads_handoff['held'] = False
+        self.assertEqual(hybrid_ads.enter_scope(mod), 'scope_on')
+        self.assertFalse(mod._ads_handoff['held'])
+        self.assertEqual(hybrid_ads.exit_scope(mod), 'scope_off')
+        self.assertFalse(mod._ads_handoff['held'])
+
     def test_sprint_in_held_tps_ads_enters_the_native_scope(self):
         mod, camera, _ = fake_mod()
         self.assertEqual(hybrid_ads.toggle_scope(mod), 'scope_on')
@@ -166,7 +176,7 @@ class ScopeTests(HybridBase):
             ('not_holding_tps_ads', lambda m, c: setattr(m, '_ads_route', 'hip')),
             ('camera_transitioning', lambda m, c: setattr(c.CameraModeState, 'bIsTransitioning', True)),
             ('weapon_changed', lambda m, c: setattr(c.CameraModeInputs, 'Weapon', S(Name='Other'))),
-            ('weapon_handoff', lambda m, c: m._ads_handoff.update(latch_active=True)),
+            ('weapon_handoff', lambda m, c: m._ads_handoff.update(reticle_rebind_active=True)),
             ('slide_or_ladder', lambda m, c: setattr(m, '_slide_active', True)),
         )
         for reason, prepare in cases:
@@ -393,7 +403,7 @@ class ReconciliationTests(HybridBase):
         return mod, camera, started, published
 
     def test_waits_for_the_blend_then_restarts_tps_ads_without_equip_gate(self):
-        from BL4ThirdPersonPOC.ads_events import _update_hybrid_ads_route_reconciliation_impl as reconcile
+        from BL4ThirdPersonPOC.ads_handoff import _update_hybrid_ads_route_reconciliation_impl as reconcile
         mod, camera, started, published = self.owner()
         camera.CameraModeState.bIsTransitioning = True
         reconcile(owner_module=mod)
@@ -408,7 +418,7 @@ class ReconciliationTests(HybridBase):
         self.assertEqual(request['identity'][3], 0xAA)
 
     def test_hybrid_weapon_swap_in_the_scope_waits_and_blends(self):
-        from BL4ThirdPersonPOC.ads_events import _update_hybrid_ads_route_reconciliation_impl as reconcile
+        from BL4ThirdPersonPOC.ads_handoff import _update_hybrid_ads_route_reconciliation_impl as reconcile
         mod, camera, started, published = self.owner()
         mod._ads_handoff['route_pending'] = None
         mod._ads_handoff['route_weapon'] = 0xCC  # scope was on another weapon

@@ -21,28 +21,10 @@ class DiagnosticsMixin:
 
     def _aim_binding_visual(self):
         row = self._visual_visual()
-        anim = self.anim_ref()
-        mesh = self.mesh_ref()
-        if anim is None or int(anim._get_address()) != self.anim_address or mesh is None or (mesh.AnimScriptInstance != anim):
-            raise RuntimeError('Bound animation instance changed')
-        values = {}
-        for name in self.INPUT_NAMES:
-            value = getattr(anim, name)
-            if isinstance(value, bool):
-                values[name] = value
-            else:
-                value = float(value)
-                if not math.isfinite(value):
-                    raise RuntimeError('Nonfinite animation input: ' + name)
-                values[name] = value
+        values, node = self.validate_visual(capture=True)
         row['animation_inputs'] = values
-        node = getattr(anim, self.NODE_NAME)
         channel, key = (str(node.RotationChannelName.TagName), str(node.BlendSpaceKey.TagName))
-        if channel != 'RotationChannel.Aim' or key != 'AnimSet.Player.3rd.AimO_3rd':
-            raise RuntimeError('Normal AimOffset configuration changed')
         alpha, weight = (float(node.ALPHA), float(node.BlendWeight))
-        if not all((math.isfinite(v) for v in (alpha, weight))):
-            raise RuntimeError('Nonfinite AimOffset values')
         row['normal_aim_offset'] = {'channel': channel, 'blend_space_key': key, 'ALPHA': alpha, 'BlendWeight': weight, 'BlendSpace': describe(node.BlendSpace) if node.BlendSpace is not None else None, 'YawAxis': int(node.YawAxis), 'PitchAxis': int(node.PitchAxis)}
         movement = self.bound()[3]
         velocity = parts(movement.Velocity, ('X', 'Y', 'Z'))
@@ -276,17 +258,21 @@ class DiagnosticsMixin:
         row['crouch_aim_neutralizations'] = int(self.aim_native.crouch_control[3])
         return row
 
-    def state_context(self):
-        current = tuple(self.mod._get_runtime())
+    def state_context(self, objects=None):
+        # The special-state stage passes its just-validated bound tuple directly.
+        # No storage or reuse across stages/callbacks; standalone diagnostics
+        # still resolve the current runtime themselves.
+        current = tuple(self.mod._get_runtime()) if objects is None else objects[:3]
         row = dict(update_index=self.frames, t=monotonic() - self.started, flags={k: bool(getattr(self.mod, k, False)) for k in ('_vehicle_camera_active', '_shop_camera_active', '_ladder_active', '_slide_active')}, third_person=bool(self.mod._third_person_enabled))
-        row['current_objects'] = [None if o is None else describe(o) for o in current]
-        live = tuple((ref() for ref in self.refs))
+        if self.collect_pose_diagnostics:
+            row['current_objects'] = [None if o is None else describe(o) for o in current]
+        live = tuple((ref() for ref in self.refs)) if objects is None else objects
         row['bound_identity_matches'] = [a is not None and b is not None and (a == b) for a, b in zip(live[:3], current)]
         if len(current) == 3 and all((o is not None for o in current)):
             pc, pawn, camera = current
-            movement = getattr(pawn, 'OakCharacterMovement', None)
+            movement = getattr(pawn, 'OakCharacterMovement', None) if objects is None else objects[3]
             row['mouse_cursor'] = bool(pc.bShowMouseCursor)
-            row['camera_mode'] = str(camera.GetActorCameraMode(pawn))
+            row['camera_mode'] = str(camera.GetActorCameraMode(pawn)) if objects is None else self.camera_mode(pawn, camera)
             if movement is not None:
                 row['movement_mode'] = int(movement.MovementMode)
                 row['custom_movement_mode'] = int(movement.CustomMovementMode)
@@ -294,6 +280,8 @@ class DiagnosticsMixin:
         return row
 
     def save_state_edge(self, row, event):
+        if 'current_objects' not in row:
+            row = dict(row, current_objects=[describe(o) for o in self.bound()[:3]])
         row = dict(row, event=event)
         self.report['special_state_edges'].append(row)
         del self.report['special_state_edges'][:-256]

@@ -49,6 +49,16 @@ class GroundMixin:
         self.report['sprint_intent_restoration_verified'] = True
 
     def validate_handler(self):
+        # Handler ownership cannot change inside one owned callback.
+        cached = getattr(self, '_callback_handler', None)
+        if cached is not None:
+            return cached
+        handler = self._validate_handler()
+        if getattr(self, '_callback_scope', False):
+            self._callback_handler = handler
+        return handler
+
+    def _validate_handler(self):
         handler, component = (self.handler_ref(), self.component_ref())
         if handler is None or component is None or int(handler._get_address()) != self.handler_address:
             raise RuntimeError('Serial-bound OnFoot handler expired')
@@ -150,6 +160,7 @@ class GroundMixin:
         sample = self.report['samples'][-1]
         self.report['requested_dash'] = {'direction_raw': requested, 'direction_name': ('Up', 'Left', 'Down', 'Right')[requested], 'source': 'OnFoot handler direction captured at native Sprint callback press entry', 'sequence': entry['sequence'], 'actor_yaw': sample['actor_rotation']['Yaw'], 'control_yaw': sample['control_rotation']['Yaw'], 'velocity_yaw': sample['velocity_yaw']}
         pawn.SetWantsToDash(True, self.dash_enum(requested))
+        self.invalidate_callback_values()
         self.report['game_writes'] += 1
         data = self.dash_branch.read(int(movement._get_address()) + 17480, 17)
         if data[0] != requested or not data[16] & 1:
@@ -163,6 +174,7 @@ class GroundMixin:
         if pawn is None or movement is None:
             raise RuntimeError('Dash request owner expired; no write')
         pawn.SetWantsToDash(False, self.dash_enum(self.cycle_saved_direction))
+        self.invalidate_callback_values()
         self.report['game_writes'] += 1
         data = self.dash_branch.read(int(movement._get_address()) + 17480, 17)
         if data[0] != self.cycle_saved_direction or data[16] & 1:
@@ -183,7 +195,7 @@ class GroundMixin:
 
     def trial_cycle(self, sample, free, moving):
         pawn, movement = (self.bound()[1], self.bound()[3])
-        active = bool(pawn.IsCharacterDashing())
+        active = self.is_dashing(pawn)
         if self.cycle_start is not None:
             if active:
                 if not self.cycle_started:
@@ -244,22 +256,15 @@ class GroundMixin:
             self.bound()
             if not self.sprint_ready:
                 if self.mesh_ref is None:
-                    self.bind_visual()
-                self.direction_trace.install()
-                self.index_trace.install()
-                self.sprint_ready = True
+                    self._bind_visual()
+                self._bind_sprint()
             if not self.route_ready:
-                self.prepare_native()
-                self.route.install()
-                self.dash_branch.install()
-                self.control[0] = 1
-                self.route_ready = True
-                self.event('MANUAL_INPUT_READY')
+                self._bind_route()
             self.validate_handler()
-            self.route.validate()
-            self.dash_branch.validate()
-            self.direction_trace.validate()
-            self.index_trace.validate()
+            for slot, owner in ((4, self.route), (5, self.dash_branch),
+                                (6, self.direction_trace), (7, self.index_trace)):
+                if self.native_audit_due(slot):
+                    owner.validate()
             self.consume_route()
             self.dash_branch.consume()
             self.recycle_diagnostics()
@@ -282,8 +287,9 @@ class GroundMixin:
                 self.live_sprint_phase = phase
                 self.event(phase)
             sample['manual_sprint_phase'] = phase
+            dash_pawn = self.bound()[1]
             sample['sprint_state'] = {n: bool(getattr(movement, n)) for n in ('bWantsToSprint', 'bWantsToStartSprinting', 'bIsSprinting')}
-            sample['dash_state'] = {'wants_dash': bool(movement.bWantsToDash), 'is_dashing': bool(self.bound()[1].IsCharacterDashing()), 'last_dash_time': float(movement.LastDashTime)}
+            sample['dash_state'] = {'wants_dash': bool(movement.bWantsToDash), 'is_dashing': self.is_dashing(dash_pawn), 'last_dash_time': float(movement.LastDashTime)}
             self.direction_trace.consume()
             self.index_trace.consume()
             if self.frames % 12 == 0:
@@ -377,9 +383,9 @@ class GroundMixin:
             return
         try:
             if not self.vector_ready:
-                self.vector_trace.install()
-                self.vector_ready = True
-            self.vector_trace.validate()
+                self._bind_vector()
+            if self.native_audit_due(8):
+                self.vector_trace.validate()
             self.vector_trace.control[5] = self.frames + 1
             self._manual_dash_frame(obj, args, ret, func)
             if not self.active:
@@ -409,7 +415,7 @@ class GroundMixin:
                 logging.error(TAG + ' STOP_FAILED rerun to retry ' + repr(cleanup))
 
     def _handoff_classify_handoff(self, pc, pawn, camera, movement):
-        mode = str(camera.GetActorCameraMode(pawn))
+        mode = self.camera_mode(pawn, camera)
         if not self.mod._third_person_enabled or bool(pc.bShowMouseCursor):
             return ('STOP', 'TPS_OR_UI_CHANGED')
         if any((bool(getattr(self.mod, k, False)) for k in ('_vehicle_camera_active', '_shop_camera_active', '_ladder_active'))):
@@ -432,21 +438,19 @@ class GroundMixin:
             # flag fell. Keep the slide body owner until that has settled,
             # even while Crouch is still held.
             return ('PAUSE', 'SLIDE_EXIT')
-        if bool(pawn.bIsCrouched) and not pawn.IsCharacterDashing():
+        if bool(pawn.bIsCrouched) and not self.is_dashing(pawn):
             return ('PAUSE', 'CROUCHED')
         if bool(self.air_dash_down(pc)):
             return ('PAUSE', 'CIRCLE_INPUT')
         if bool(pawn.bIsCrouched):
             return ('PAUSE', 'CROUCHED')
-        if self.cycle_start is None and bool(pawn.IsCharacterDashing()):
+        if self.cycle_start is None and self.is_dashing(pawn):
             return ('PAUSE', 'NATIVE_DASH')
         return ('RUN', None)
 
     def _handoff_paused_frame(self, obj, args, ret, func, reason):
         self.disable_handoff_overrides()
-        for owner in self.owners():
-            if owner.hook is not None:
-                owner.validate()
+        self.audit_owners()
         self.read_combat()
         self._sample_frame(obj, args, ret, func)
         if not self.active:
@@ -479,6 +483,7 @@ class GroundMixin:
         self.trim_diagnostics()
 
     def _handoff_resume_handoff(self):
+        self._audit_full = True
         if self.route_ready:
             self.consume_route()
             self.dash_branch.consume()
@@ -537,7 +542,7 @@ class GroundMixin:
             pc, pawn, camera, movement = self.bound()
             grounded = int(movement.MovementMode) == 1
             circle = bool(self.air_dash_down(pc))
-            dash = bool(pawn.IsCharacterDashing())
+            dash = self.is_dashing(pawn)
             slide = bool(getattr(self.mod, '_slide_active', False))
             state = (grounded, circle, dash, slide, bool(pawn.bIsCrouched), bool(movement.bIsSprinting), self.cycle_start is not None)
             if grounded and dash and (not self.ground_circle_previous_dash):
@@ -547,7 +552,7 @@ class GroundMixin:
             self.ground_circle_previous_dash = bool(grounded and dash)
             if state != self.ground_circle_last_state or (grounded and (circle or dash or slide) and (self.frames % 6 == 0)):
                 sample = self.report['samples'][-1]
-                self.report['ground_circle_samples'].append(dict(update_index=self.frames, t=sample['t'], grounded=grounded, circle_down=circle, native_is_dashing=dash, native_wants_dash=bool(movement.bWantsToDash), slide=slide, crouched=bool(pawn.bIsCrouched), actual_sprint=bool(movement.bIsSprinting), l3_request_cycle=self.cycle_start is not None, body_rotation=sample['actor_rotation'], control_rotation=sample['control_rotation'], velocity_yaw=sample.get('velocity_yaw'), speed=sample['horizontal_speed'], camera_mode=str(camera.GetActorCameraMode(pawn)), handoff_state=self.handoff_reason))
+                self.report['ground_circle_samples'].append(dict(update_index=self.frames, t=sample['t'], grounded=grounded, circle_down=circle, native_is_dashing=dash, native_wants_dash=bool(movement.bWantsToDash), slide=slide, crouched=bool(pawn.bIsCrouched), actual_sprint=bool(movement.bIsSprinting), l3_request_cycle=self.cycle_start is not None, body_rotation=sample['actor_rotation'], control_rotation=sample['control_rotation'], velocity_yaw=sample.get('velocity_yaw'), speed=sample['horizontal_speed'], camera_mode=self.camera_mode(pawn, camera), handoff_state=self.handoff_reason))
                 self.report['ground_circle_sample_total'] += 1
                 del self.report['ground_circle_samples'][:-512]
                 self.ground_circle_last_state = state
@@ -577,23 +582,15 @@ class GroundMixin:
             return
         try:
             if self.entry_ready:
-                for action, rva, o, t in self.entries:
-                    t.validate()
+                if self.native_audit_due(9):
+                    for action, rva, o, t in self.entries:
+                        t.validate()
                 self.consume_entry()
             self._ground_action_frame(obj, args, ret, func)
             if not self.active:
                 return
             if self.route_ready and (not self.entry_ready):
-                for action, rva, o, t in self.entries:
-                    o.base = self.base
-                    o.control[1] = self.handler_address
-                    o.control[2] = threading.get_native_id()
-                    o.control[4] = ctypes.addressof(o.buffer)
-                    o.control[7] = self.movement_address
-                    t.install()
-                self.entry_ready = True
-                self.report['native_circle_entry_installed'] = True
-                logging.warning(TAG + ' NATIVE_ENTRY_READY Action_Crouch; manual-stop combined test')
+                self._bind_entries()
             if self.entry_ready:
                 for action, rva, o, t in self.entries:
                     o.control[5] = self.frames
@@ -620,13 +617,15 @@ class GroundMixin:
         owner = self.entries[0][2]
         trace = self.vector_trace
         owner.control[16] = 0
-        self.validate_handler()
-        direction, has = struct.unpack('<2B', trace.read(self.handler_address + 72, 2))
-        if direction not in (0, 1, 2, 3) or has != 1:
-            return
+        # Standing still never prepares a vector; skip the handler read then.
+        # _manual_dash_frame validated the handler earlier in this update.
         v = sample['velocity']
         length = math.hypot(v['X'], v['Y'])
         if not math.isfinite(length) or length <= 100:
+            return
+        self.validate_handler()
+        direction, has = struct.unpack('<2B', trace.read(self.handler_address + 72, 2))
+        if direction not in (0, 1, 2, 3) or has != 1:
             return
         target = [v['X'] / length, v['Y'] / length, 0.0]
         cfg = struct.unpack('<Q', trace.read(self.movement_address + 17456, 8))[0]
@@ -729,7 +728,7 @@ class GroundMixin:
                 self.ground_wait_release = False
             if self.ground_trial is not None:
                 self.publish_trial()
-            elif self.entry_ready and self.vector_ready and (not self.ground_wait_release) and self.report['samples'] and (self.impulse_index is not None) and (self.cycle_start is None) and (self.air_cycle is None) and (int(movement.MovementMode) == 1) and (not self.combat['active']) and (not self.mod._slide_active) and (not pawn.bIsCrouched) and (not pawn.IsCharacterDashing()):
+            elif self.entry_ready and self.vector_ready and (not self.ground_wait_release) and self.report['samples'] and (self.impulse_index is not None) and (self.cycle_start is None) and (self.air_cycle is None) and (int(movement.MovementMode) == 1) and (not self.combat['active']) and (not self.mod._slide_active) and (not pawn.bIsCrouched) and (not self.is_dashing(pawn)):
                 self.prepare_ground(self.report['samples'][-1])
             else:
                 self.entries[0][2].control[16] = 0

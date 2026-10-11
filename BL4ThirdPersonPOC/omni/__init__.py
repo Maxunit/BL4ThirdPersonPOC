@@ -79,6 +79,8 @@ def start(owner):
 
 def shutdown(owner, reason='FEATURE_DISABLED'):
     """Stop and restore. Returns True only when no feature state remains."""
+    from . import profiler
+    profiler.cancel(owner, reason)
     state = getattr(owner, KEY, None)
     if state is None:
         _last_failure['reason'] = None

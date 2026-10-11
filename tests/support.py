@@ -17,7 +17,12 @@ if 'BL4ThirdPersonPOC' not in sys.modules:
 
 LOG = []
 sdk = types.ModuleType('unrealsdk')
-sdk.hooks = S(Type=S(PRE=0, POST=2, POST_UNCONDITIONAL=1))
+sdk.hooks = types.ModuleType('unrealsdk.hooks')
+sdk.hooks.Type = S(PRE=0, POST=2, POST_UNCONDITIONAL=1)
+sdk.hooks.Block = type('Block', (), {})
+sdk.hooks.add_hook = sdk.hooks.remove_hook = lambda *args, **kwargs: None
+sdk.hooks.has_hook = lambda *args: False
+sys.modules['unrealsdk.hooks'] = sdk.hooks
 sdk.logging = S(warning=lambda m: LOG.append(('warning', m)), error=lambda m: LOG.append(('error', m)),
                 info=lambda m: LOG.append(('info', m)), dev_warning=lambda m: LOG.append(('dev_warning', m)))
 sdk.make_struct = lambda *args, **kwargs: S(**kwargs)

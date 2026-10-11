@@ -1,4 +1,5 @@
 """Own-vehicle exit tickets; paired ClientRestart and live binding admission."""
+from . import hitch
 from itertools import islice
 import math
 from time import monotonic
@@ -27,11 +28,12 @@ class ExitAir:
         self.ticket = None
         self.binding_wait = None
 
-    def context(self):
+    def context(self, current=None):
+        """Owner/identity guard; current is the runtime resolved earlier in this callback."""
         if (self.updates._owner is not self.producer or not self.producer.active
                 or getattr(self.mod, OMNI_KEY, None) is not self.sup or not self.sup.active):
             raise RuntimeError('Omni/update owner changed or stopped')
-        pc, pawn, camera = map(live, self.mod._get_runtime())
+        pc, pawn, camera = map(live, self.mod._get_runtime() if current is None else current)
         if pc != self.pc_ref() or camera != self.camera_ref():
             raise RuntimeError('Local controller/camera identity changed')
         return pc, pawn, camera
@@ -264,11 +266,13 @@ class VehicleHandoff:
         child = self.sup.child
         if self.air is None:
             if child is None or not child.active or str(pawn.Class.Name) != 'OakCharacter': return
-            self.arm()
+            with hitch.step('vehicle.arm'):
+                self.arm()
         elif (pc != self.air.pc_ref() or camera != self.air.camera_ref()
                 or self.air.character_ref() is None
                 or (str(pawn.Class.Name) == 'OakCharacter' and pawn != self.air.character_ref())):
-            self.stop()
+            with hitch.step('vehicle.stop'):
+                self.stop()
             self.sup.vehicle = None
             return
         if not self.normal(pc):
@@ -276,7 +280,8 @@ class VehicleHandoff:
             self.air.cancel('SPECIAL_OR_DISABLED')
             self.air.seated = False
             return
-        self.air.context()
+        # Same callback, same game thread: reuse the runtime resolved above.
+        self.air.context((pc, pawn, camera))
         drive = bool(getattr(getattr(self.mod, 'vehicle_camera_relative_drive', None), 'value', False))
         if self.summon is not None and not drive:
             self.summon.stop()
@@ -286,9 +291,13 @@ class VehicleHandoff:
             self.summon = SummonFacing.__new__(SummonFacing)
             self.summon.__init__(self)
             self.summon.install()
-        self.air.frame(pc, pawn, camera)
-        if self.summon is not None: self.summon.frame(pc, pawn, camera)
-        self.exit.frame(pc, pawn, camera)
+        with hitch.step('vehicle.exit_air'):
+            self.air.frame(pc, pawn, camera)
+        if self.summon is not None:
+            with hitch.step('vehicle.summon'):
+                self.summon.frame(pc, pawn, camera)
+        with hitch.step('vehicle.exit_facing'):
+            self.exit.frame(pc, pawn, camera)
 
     def restart(self, stage, obj, args):
         if self.air is None: return
