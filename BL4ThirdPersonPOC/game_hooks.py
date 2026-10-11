@@ -2616,6 +2616,10 @@ def _purge_mod_sdk_hooks_impl(*, include_prompt: bool, owner_module) -> None:
 def _on_enable_impl(*, owner_module) -> None:
     from . import npc_camera_visibility, vehicle_camera, vehicle_control, runtime_updates
     from . import omni
+    from . import ground_slam_distance
+    if not ground_slam_distance.shutdown(owner_module):
+        owner_module.logging.error('[BL4ThirdPersonPOC] Slam distance cleanup incomplete')
+        return
 
     # The experimental movement feature depends on runtime_updates and the
     # native helpers below; retire any state that survived a reload first.
@@ -2720,6 +2724,10 @@ def _on_enable_impl(*, owner_module) -> None:
                 )
     owner_module._dynamic_motion_reset()
     owner_module._reset_reticle_publisher()
+    from . import root_height
+    root_height.reset(owner_module)
+    owner_module._camera_frame = None
+
     owner_module._reset_mantle_camera_state()
     owner_module._last_slide_camera_force_time = 0.0
     owner_module._ladder_active = False

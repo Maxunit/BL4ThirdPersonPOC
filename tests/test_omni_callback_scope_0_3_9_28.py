@@ -87,7 +87,8 @@ class CallbackScopeTests(unittest.TestCase):
         session.updates = S(is_game_thread=lambda: True)
         session.inputs = S(begin_frame=lambda **kw: None, end_frame=lambda: None)
         pawn = S(IsCharacterDashing=Mock(return_value=False))
-        objects = (S(), pawn, S(), S())
+        objects = (S(), pawn, S(GetActorCameraMode=lambda pawn: 'ThirdPerson'),
+                   S(MovementMode=1, CustomMovementMode=0))
         session.refs = tuple(lambda o=o: o for o in objects)
         session.mod._get_runtime = lambda: objects[:3]
         pawn.OakCharacterMovement = objects[3]

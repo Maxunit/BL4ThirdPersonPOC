@@ -1,16 +1,66 @@
-# BL4ThirdPersonPOC 0.3.9.32 Vehicle Facing QA
+# BL4ThirdPersonPOC 0.3.9.36 Ground Slam QA
 
-Basiert auf der Repo-.31, Commit `001a62a45d7f9307f1b91088e7b25bfba63d0941`.
-Beim Ausstieg gilt jetzt die Fahrzeugausrichtung bei jedem Tempo, einschließlich
-kurzer WASD-Tipps, Rückwärtsfahrt und Drift. Der Summon-Publisher verwendet die
-aktuelle Actor-Rotation der Figur statt ihrer letzten Bewegungseingabe.
-Der bestehende Native-Ausstiegsbericht enthält den tatsächlich angewandten Yaw.
-Die Lichtschützen-Kamera-Korrektur und die Performance-Arbeit der Repo-.31 sind
-enthalten. Spieltest der beiden verbleibenden Fehler erforderlich.
+Während des aktiven Ground Slams und GroundSlamExit übernimmt die native
+Oberkörperanimation: Omni lässt seine Aim-Yaw-/Pitch-Begrenzung aus; im
+aktiven Luft-Slam werden auch gewöhnliche Jump-Idle-/Lean-Pose-Eingriffe
+freigegeben. Normales freies Umschauen, Sprünge und Richtungssteuerung bleiben
+erhalten. Die sichtbare Animationskorrektur benötigt einen Spieltest.
 
-- [Befund und Änderungen](docs/CHANGELOG_0.3.9.32_VEHICLE_FACING_QA.md)
-- [Kurzer Spieltest](docs/TESTPLAN_0.3.9.32_VEHICLE_FACING_QA.md)
-- [Lokale Validierung](docs/VALIDATION_0.3.9.32_VEHICLE_FACING_QA.md)
+Die bestätigte V4-Distanzfunktion ist integriert: weich herauszoomen, oben
+halten, während der Bodenannäherung zurückfahren. Standard **150 cm**;
+**CAMERA → Ground Slam Extra Distance**, 0–250 cm, 0 schaltet den Zusatz aus.
+Der vorhandene TPS-Ground-Slam-Schalter steuert weiterhin die gesamte Funktion.
+Keine PyExec-Probe nötig, keine zusätzlichen Hooks, Timer oder nativen Patches.
+Die beiden Start-Traces kalibrieren am normalen Boden; danach läuft ein Trace
+pro aktivem Slam-Update. Im gewöhnlichen Stand und bei normalen Sprüngen gibt
+es keine fortlaufenden Boden-Traces.
+
+- [Kurzer Spieltest](docs/TESTPLAN_0.3.9.36_GROUND_SLAM_QA.md)
+- [Änderungen](docs/CHANGELOG_0.3.9.36_GROUND_SLAM_QA.md)
+- [Lokale Validierung](docs/VALIDATION_0.3.9.36_GROUND_SLAM_QA.md)
+
+## Enthalten: 0.3.9.35 Root Height QA
+
+Gezielte Kamera-QA auf .34 (`1ba29a7`), einschließlich der bestätigten Fahrzeug-
+und Omni-Free-Look-Korrekturen aus .32/.33. Die neue Höhenkorrektur folgt einer
+Root-Absenkung gegenüber der Mesh-/Bodenreferenz, ohne Figur, Kapsel oder
+Animationen zu verändern. Sie bleibt bei anhaltender Absenkung bestehen.
+Motion Camera verarbeitet die zusätzliche Oberkörperbewegung separat.
+
+Standard: an. Im Menü unter **CAMERA → Grounded Body Height (QA)** oder mit
+`bl4tps_root_height on|off|status` abschaltbar. Funktioniert auch ohne Motion
+Camera und ohne Omni. Die erste QA kompensiert normales Gehen/Stehen am Boden;
+bei Sprung und Ducken läuft die Korrektur weich aus, besondere Kameramodi
+übernehmen ohne diesen Zusatz. Keine neuen Hooks, Timer oder nativen Patches.
+
+- [Kurzer Spieltest](docs/TESTPLAN_0.3.9.35_ROOT_HEIGHT_QA.md)
+- [Änderungen und Messgrundlage](docs/CHANGELOG_0.3.9.35_ROOT_HEIGHT_QA.md)
+- [Lokale Validierung](docs/VALIDATION_0.3.9.35_ROOT_HEIGHT_QA.md)
+
+Die Höhenaufnahme aus .34 bleibt erhalten: `bl4tps_height arm <label>`, Konsole
+schließen und F10. Maximal 600 vorhandene eigene Widget-Updates, danach JSON in
+`sdk_mods/settings/BL4ThirdPersonPOC_reports/`. Zusätzlich enthält jede Zeile
+`root_height` mit roher Absenkung, Ziel, gefilterter Korrektur und Status.
+Die Diagnoseaufnahme selbst schreibt keine Spielwerte. Ohne Vormerkung behält
+F10 seine bisherige Funktion. Die .35 enthielt noch keine Slam-Distanzfunktion.
+
+## Enthalten: 0.3.9.33 Omni Free Look QA
+
+Basiert auf .32, lokalem QA-Checkpoint
+`d9c63d4` (Repo-.31: `001a62a45d7f9307f1b91088e7b25bfba63d0941`).
+Beim freien Omni-Umschauen darf der Oberkörper seitlich mitdrehen: Aim-Eingabe
+höchstens ±35°. Körperneigung und Drehung blenden zwischen 60° und 90°
+Kameraverdrehung relativ zur Figur weich aus. Ab der Seitenansicht ist dieser
+kamerabedingte Aim-Anteil neutral. Gilt im normalen, freien Omni am Boden,
+stehend und geduckt. Zielen und Schießen geben die Aim-Pose weiterhin ans Spiel.
+Die Fahrzeugkorrektur der .32 ist vollständig enthalten; Ben hat beim ersten
+Spieltest mit Lichtschütze und Manta korrekte Ein-/Ausstiegsrichtungen bestätigt.
+Ben hat die neue Oberkörperbewegung im ersten .33-Spieltest bestätigt.
+
+- [Änderungen](docs/CHANGELOG_0.3.9.33_OMNI_FREE_LOOK_QA.md)
+- [Kurzer Spieltest](docs/TESTPLAN_0.3.9.33_OMNI_FREE_LOOK_QA.md)
+- [Lokale Validierung](docs/VALIDATION_0.3.9.33_OMNI_FREE_LOOK_QA.md)
+- Vorgänger: [0.3.9.32 Vehicle Facing](docs/CHANGELOG_0.3.9.32_VEHICLE_FACING_QA.md)
 - Vorgänger: [0.3.9.31 Summon Seat](docs/CHANGELOG_0.3.9.31_SUMMON_SEAT_QA.md)
 - Vorgänger: [0.3.9.30 Exit Facing](docs/CHANGELOG_0.3.9.30_VEHICLE_EXIT_FACING_QA.md),
   [0.3.9.29 Bind & Hitch](docs/CHANGELOG_0.3.9.29_OMNI_BIND_HITCH_QA.md),

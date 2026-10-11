@@ -1,0 +1,186 @@
+{
+  "stand": {
+    "32": {
+      "scenario": "stand",
+      "updates": 600,
+      "game_writes": 0,
+      "per_update": {
+        "get_runtime": 2.0,
+        "prop_get": 147.917,
+        "prop_set": 0.0,
+        "ufunc": 26.1,
+        "uobj_eq": 53.003,
+        "weak_new": 0.0,
+        "weak_deref": 44.757,
+        "addr": 4.72,
+        "path_name": 0.453,
+        "rpm": 4.583,
+        "virtual_query": 0.0,
+        "thread_check": 19.0
+      },
+      "mapping_scans": 2,
+      "bound_calls_per_update": 24.833333333333332,
+      "input_snapshots_per_update": 11.0
+    },
+    "33": {
+      "scenario": "stand",
+      "updates": 600,
+      "game_writes": 0,
+      "per_update": {
+        "get_runtime": 2.0,
+        "prop_get": 147.917,
+        "prop_set": 0.0,
+        "ufunc": 26.1,
+        "uobj_eq": 53.003,
+        "weak_new": 0.0,
+        "weak_deref": 44.757,
+        "addr": 4.72,
+        "path_name": 0.453,
+        "rpm": 4.583,
+        "virtual_query": 0.0,
+        "thread_check": 19.0
+      },
+      "mapping_scans": 2,
+      "bound_calls_per_update": 24.833333333333332,
+      "input_snapshots_per_update": 11.0
+    }
+  },
+  "crouch": {
+    "32": {
+      "scenario": "crouch",
+      "updates": 600,
+      "game_writes": 1,
+      "per_update": {
+        "get_runtime": 2.0,
+        "prop_get": 113.833,
+        "prop_set": 0.0,
+        "ufunc": 30.1,
+        "uobj_eq": 41.003,
+        "weak_new": 0.0,
+        "weak_deref": 34.673,
+        "addr": 3.553,
+        "path_name": 0.453,
+        "rpm": 6.333,
+        "virtual_query": 0.0,
+        "thread_check": 16.0
+      },
+      "mapping_scans": 2,
+      "bound_calls_per_update": 18.833333333333332,
+      "input_snapshots_per_update": 9.0
+    },
+    "33": {
+      "scenario": "crouch",
+      "updates": 600,
+      "game_writes": 1,
+      "per_update": {
+        "get_runtime": 2.0,
+        "prop_get": 113.833,
+        "prop_set": 0.0,
+        "ufunc": 30.1,
+        "uobj_eq": 41.003,
+        "weak_new": 0.0,
+        "weak_deref": 34.673,
+        "addr": 3.553,
+        "path_name": 0.453,
+        "rpm": 6.333,
+        "virtual_query": 0.0,
+        "thread_check": 16.0
+      },
+      "mapping_scans": 2,
+      "bound_calls_per_update": 18.833333333333332,
+      "input_snapshots_per_update": 9.0
+    }
+  },
+  "move": {
+    "32": {
+      "scenario": "move",
+      "updates": 600,
+      "game_writes": 3,
+      "per_update": {
+        "get_runtime": 2.0,
+        "prop_get": 167.917,
+        "prop_set": 0.0,
+        "ufunc": 27.1,
+        "uobj_eq": 59.003,
+        "weak_new": 0.0,
+        "weak_deref": 49.757,
+        "addr": 4.72,
+        "path_name": 0.453,
+        "rpm": 8.583,
+        "virtual_query": 0.0,
+        "thread_check": 20.0
+      },
+      "mapping_scans": 2,
+      "bound_calls_per_update": 26.833333333333332,
+      "input_snapshots_per_update": 11.0
+    },
+    "33": {
+      "scenario": "move",
+      "updates": 600,
+      "game_writes": 3,
+      "per_update": {
+        "get_runtime": 2.0,
+        "prop_get": 167.917,
+        "prop_set": 0.0,
+        "ufunc": 27.1,
+        "uobj_eq": 59.003,
+        "weak_new": 0.0,
+        "weak_deref": 49.757,
+        "addr": 4.72,
+        "path_name": 0.453,
+        "rpm": 8.583,
+        "virtual_query": 0.0,
+        "thread_check": 20.0
+      },
+      "mapping_scans": 2,
+      "bound_calls_per_update": 26.833333333333332,
+      "input_snapshots_per_update": 11.0
+    }
+  },
+  "turn": {
+    "32": {
+      "scenario": "turn",
+      "updates": 600,
+      "game_writes": 606,
+      "per_update": {
+        "get_runtime": 2.0,
+        "prop_get": 170.917,
+        "prop_set": 0.0,
+        "ufunc": 30.1,
+        "uobj_eq": 59.003,
+        "weak_new": 0.0,
+        "weak_deref": 49.757,
+        "addr": 4.72,
+        "path_name": 0.453,
+        "rpm": 8.583,
+        "virtual_query": 0.0,
+        "thread_check": 21.0
+      },
+      "mapping_scans": 2,
+      "bound_calls_per_update": 26.833333333333332,
+      "input_snapshots_per_update": 11.0
+    },
+    "33": {
+      "scenario": "turn",
+      "updates": 600,
+      "game_writes": 606,
+      "per_update": {
+        "get_runtime": 2.0,
+        "prop_get": 170.917,
+        "prop_set": 0.0,
+        "ufunc": 30.1,
+        "uobj_eq": 59.003,
+        "weak_new": 0.0,
+        "weak_deref": 49.757,
+        "addr": 4.72,
+        "path_name": 0.453,
+        "rpm": 8.583,
+        "virtual_query": 0.0,
+        "thread_check": 21.0
+      },
+      "mapping_scans": 2,
+      "bound_calls_per_update": 26.833333333333332,
+      "input_snapshots_per_update": 11.0
+    }
+  }
+}

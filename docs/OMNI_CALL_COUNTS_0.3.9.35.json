@@ -1,0 +1,47 @@
+{
+  "scope": "Existing Omni pipeline only; camera updater is counted separately. No FPS measurement.",
+  "0.3.9.34": {
+    "scenario": "stand",
+    "updates": 600,
+    "game_writes": 0,
+    "per_update": {
+      "get_runtime": 2.0,
+      "prop_get": 147.917,
+      "prop_set": 0.0,
+      "ufunc": 26.1,
+      "uobj_eq": 53.003,
+      "weak_new": 0.0,
+      "weak_deref": 44.757,
+      "addr": 4.72,
+      "path_name": 0.453,
+      "rpm": 4.583,
+      "virtual_query": 0.0,
+      "thread_check": 19.0
+    },
+    "mapping_scans": 2,
+    "bound_calls_per_update": 24.833333333333332,
+    "input_snapshots_per_update": 11.0
+  },
+  "0.3.9.35": {
+    "scenario": "stand",
+    "updates": 600,
+    "game_writes": 0,
+    "per_update": {
+      "get_runtime": 2.0,
+      "prop_get": 147.917,
+      "prop_set": 0.0,
+      "ufunc": 26.1,
+      "uobj_eq": 53.003,
+      "weak_new": 0.0,
+      "weak_deref": 44.757,
+      "addr": 4.72,
+      "path_name": 0.453,
+      "rpm": 4.583,
+      "virtual_query": 0.0,
+      "thread_check": 19.0
+    },
+    "mapping_scans": 2,
+    "bound_calls_per_update": 24.833333333333332,
+    "input_snapshots_per_update": 11.0
+  }
+}

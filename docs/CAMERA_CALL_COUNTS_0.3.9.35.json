@@ -1,0 +1,173 @@
+{
+  "note": "Synthetic selected calls only: no property/weak/native counts or FPS.",
+  "scenarios": {
+    "ground_motion_off": {
+      "0.3.9.34": {
+        "updates": 600,
+        "selected_calls": {
+          "runtime": 1200,
+          "camera_mode": 600,
+          "offset_setter": 600,
+          "actor": 600,
+          "mesh": 600,
+          "spine": 600
+        },
+        "selected_ufunctions": 2400,
+        "final_offset_z": 10.0
+      },
+      "0.3.9.35_on": {
+        "updates": 600,
+        "selected_calls": {
+          "runtime": 1800,
+          "camera_mode": 1200,
+          "offset_setter": 600,
+          "actor": 600,
+          "mesh": 600,
+          "spine": 600,
+          "root": 600
+        },
+        "selected_ufunctions": 3600,
+        "final_offset_z": 10.0
+      },
+      "0.3.9.35_off": {
+        "updates": 600,
+        "selected_calls": {
+          "runtime": 1200,
+          "camera_mode": 600,
+          "offset_setter": 600,
+          "actor": 600,
+          "mesh": 600,
+          "spine": 600
+        },
+        "selected_ufunctions": 2400,
+        "final_offset_z": 10.0
+      }
+    },
+    "perch_motion_off": {
+      "0.3.9.34": {
+        "updates": 600,
+        "selected_calls": {
+          "runtime": 1200,
+          "camera_mode": 600,
+          "offset_setter": 600,
+          "actor": 600,
+          "mesh": 600,
+          "spine": 600
+        },
+        "selected_ufunctions": 2400,
+        "final_offset_z": 10.0
+      },
+      "0.3.9.35_on": {
+        "updates": 600,
+        "selected_calls": {
+          "runtime": 2400,
+          "camera_mode": 1200,
+          "offset_setter": 1200,
+          "actor": 600,
+          "mesh": 600,
+          "spine": 600,
+          "root": 600
+        },
+        "selected_ufunctions": 3600,
+        "final_offset_z": -33.999999999999986
+      },
+      "0.3.9.35_off": {
+        "updates": 600,
+        "selected_calls": {
+          "runtime": 1200,
+          "camera_mode": 600,
+          "offset_setter": 600,
+          "actor": 600,
+          "mesh": 600,
+          "spine": 600
+        },
+        "selected_ufunctions": 2400,
+        "final_offset_z": 10.0
+      }
+    },
+    "ground_motion_on": {
+      "0.3.9.34": {
+        "updates": 600,
+        "selected_calls": {
+          "runtime": 1200,
+          "camera_mode": 1200,
+          "offset_setter": 600,
+          "actor": 1200,
+          "mesh": 600,
+          "spine": 1200
+        },
+        "selected_ufunctions": 4200,
+        "final_offset_z": 10.0
+      },
+      "0.3.9.35_on": {
+        "updates": 600,
+        "selected_calls": {
+          "runtime": 1800,
+          "camera_mode": 1800,
+          "offset_setter": 600,
+          "actor": 600,
+          "mesh": 600,
+          "spine": 600,
+          "root": 600
+        },
+        "selected_ufunctions": 4200,
+        "final_offset_z": 10.0
+      },
+      "0.3.9.35_off": {
+        "updates": 600,
+        "selected_calls": {
+          "runtime": 1200,
+          "camera_mode": 1200,
+          "offset_setter": 600,
+          "actor": 1200,
+          "mesh": 600,
+          "spine": 1200
+        },
+        "selected_ufunctions": 4200,
+        "final_offset_z": 10.0
+      }
+    },
+    "perch_motion_on": {
+      "0.3.9.34": {
+        "updates": 600,
+        "selected_calls": {
+          "runtime": 1200,
+          "camera_mode": 1200,
+          "offset_setter": 600,
+          "actor": 1200,
+          "mesh": 600,
+          "spine": 1200
+        },
+        "selected_ufunctions": 4200,
+        "final_offset_z": 10.0
+      },
+      "0.3.9.35_on": {
+        "updates": 600,
+        "selected_calls": {
+          "runtime": 2400,
+          "camera_mode": 1800,
+          "offset_setter": 1200,
+          "actor": 600,
+          "mesh": 600,
+          "spine": 600,
+          "root": 600
+        },
+        "selected_ufunctions": 4200,
+        "final_offset_z": -33.999999999999986
+      },
+      "0.3.9.35_off": {
+        "updates": 600,
+        "selected_calls": {
+          "runtime": 1200,
+          "camera_mode": 1200,
+          "offset_setter": 600,
+          "actor": 1200,
+          "mesh": 600,
+          "spine": 1200
+        },
+        "selected_ufunctions": 4200,
+        "final_offset_z": 10.0
+      }
+    }
+  }
+}

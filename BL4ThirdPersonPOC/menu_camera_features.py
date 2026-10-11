@@ -18,6 +18,18 @@ def build(camera, ads, state, settings):
     ui.gap(camera, 12)
     view(camera, 'feature:shoulder', settings['shoulder'], 'Shoulder Swap Blend',
          'Seconds / 0 = instant / default 0.20', (0., 1.), .01)
+    if settings.get('slam_distance') is not None:
+        view(camera, 'feature:slam_distance', settings['slam_distance'],
+             'Ground Slam Extra Distance', 'Centimeters / 0 = off / default 150',
+             (0., 250.), 5.)
+    if settings.get('root_height') is not None:
+        ui.gap(camera, 8)
+        line = ui.new('HorizontalBox', camera)
+        state['root_height_label'] = ui.text(line, '', state, 16)
+        ui.row(line, state['root_height_label'], fill=True, center=True)
+        ui.row(line, ui.button(line, 'TOGGLE', state, 'feature:root_height', 180, 44, ui.GOLD))
+        ui.column(camera, line)
+        ui.column(camera, ui.text(camera, 'Keep framing when the standing body lowers on terrain.', state, 12, ui.DIM))
     ui.heading(ads, 'TPS ADS ZOOM', 'Weapon-relative zoom / 1.00x keeps existing zoom.', state, 26, 13)
     view(ads, 'feature:global', settings['global'], 'Global Zoom Multiplier',
          'Applies to every category using GLOBAL', ZOOM_RANGE, .05)
@@ -60,6 +72,8 @@ def build(camera, ads, state, settings):
 
 def refresh(state):
     settings = state['camera_features']
+    if state.get('root_height_label') is not None:
+        state['root_height_label'].SetText('Grounded Body Height (QA): ' + ('ON' if settings['root_height'].value is True else 'OFF'))
     for scope, view, options in state['feature_views']:
         if 'custom_flag' not in view:
             continue
@@ -79,6 +93,10 @@ def refresh(state):
 
 def dispatch(state):
     from .menu_console import clicked
+    settings = state['camera_features']
+    if settings.get('root_height') is not None and clicked(state, 'feature:root_height'):
+        settings['set_root_height'](not (settings['root_height'].value is True))
+        state['dirty'] = True
     for direction, delta in (('prev', -1), ('next', 1)):
         if clicked(state, 'ads:'+direction):
             index = max(0, min(len(CATEGORIES)-1, state['ads_page']+delta))
@@ -95,12 +113,15 @@ def dispatch(state):
 def reset(state, scope=None):
     from .menu_console import commit_feature_values
     settings = state['camera_features']
+    if scope in (None, 'shoulder') and settings.get('root_height') is not None:
+        settings['set_root_height'](True)
     for key, pair in settings['categories'].items():
         if scope in (None, 'ads'):
             pair[0].value = False
     for name, view, options in state['feature_views']:
-        shoulder = name == 'feature:shoulder'
-        if scope is None or (scope == 'shoulder' and shoulder) or (scope == 'ads' and not shoulder):
-            commit_feature_values(state, view, options, [.2 if shoulder else 1.])
+        camera = name in ('feature:shoulder', 'feature:slam_distance')
+        default = .2 if name == 'feature:shoulder' else 150. if name == 'feature:slam_distance' else 1.
+        if scope is None or (scope == 'shoulder' and camera) or (scope == 'ads' and not camera):
+            commit_feature_values(state, view, options, [default])
     state['dirty'] = True
     refresh(state)

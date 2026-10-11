@@ -32,7 +32,9 @@ def staged_session():
         return run
     for name in GameplaySession.BIND_STEPS:
         setattr(session, '_bind_' + name, binder(name))
-    objects = (S(), S(IsCharacterDashing=lambda: False), S(), S())
+    objects = (S(), S(IsCharacterDashing=lambda: False),
+               S(GetActorCameraMode=lambda pawn: 'ThirdPerson'),
+               S(MovementMode=1, CustomMovementMode=0))
     session.bound = lambda: objects
     session.inputs = S(begin_frame=lambda **kw: None, end_frame=lambda: None)
     session.classify_handoff = Mock(return_value=('RUN', None))

@@ -12,7 +12,7 @@ Native lifetime and handoff contracts are described in docs/NATIVE_LIFECYCLE.md.
 from __future__ import annotations
 
 # Available before build_mod invokes the automatic enable callback.
-MOD_VERSION = "0.3.9.32"
+MOD_VERSION = "0.3.9.36"
 HYBRID_ADS_AVAILABLE = True  # optional Hybrid diagnostics QA
 
 import builtins
@@ -733,6 +733,13 @@ tps_ground_slam_beta = BoolOption(
 )
 _ground_slam_beta_fault = False
 
+ground_slam_distance_cm = SliderOption(
+    'ground_slam_distance_cm', 150.0, 0.0, 250.0, step=5.0, is_integer=False,
+    is_hidden=True, display_name='Ground Slam Extra Distance',
+    description='Additional camera distance in cm during a Ground Slam; 0 disables it.',
+)
+_camera_feature_options['slam_distance'] = ground_slam_distance_cm
+
 _ffyl_beta_fault = False
 
 # Retain the serialized SDK key so existing hidden-option settings load unchanged.
@@ -743,6 +750,29 @@ dynamic_motion_camera_enabled = BoolOption(
     display_name="Dynamic Camera Motion",
     description="Apply Spine3-based camera motion in third person.",
 )
+
+
+root_height_enabled = BoolOption(
+    "root_height_enabled", True, is_hidden=True,
+    display_name="Grounded Body Height (QA)",
+    description="Follow terrain-related body lowering in normal third person.",
+)
+from . import root_height
+_camera_frame = None
+root_height.reset(sys.modules[__name__])
+_camera_feature_options['root_height'] = root_height_enabled
+_camera_feature_options['set_root_height'] = lambda value: _set_root_height_enabled(value)
+
+
+def _set_root_height_enabled(value: bool) -> None:
+    root_height_enabled.value = value is True
+    root_height.reset(sys.modules[__name__])
+    _dynamic_motion_reset()
+    try:
+        mod.save_settings()
+    except Exception as exc:
+        logging.warning(f"[BL4ThirdPersonPOC.RootHeight] SAVE_FAILED {exc}")
+    logging.info(f"[BL4ThirdPersonPOC.RootHeight] enabled={root_height_enabled.value}")
 
 
 def _get_runtime() -> tuple[Any, Any, Any]:
@@ -1093,6 +1123,7 @@ def _apply_dynamic_motion_camera_offset(pawn: Any, manager: Any) -> None:
         manager,
         _dynamic_motion_enabled=_dynamic_motion_enabled,
         motion_parameters=_dynamic_motion_parameters,
+        _camera_frame=_camera_frame,
         _mantle_camera_state=_mantle_camera_state,
         _third_person_enabled=_third_person_enabled,
         _third_person_pushed=_third_person_pushed,
@@ -1134,6 +1165,7 @@ def _apply_mantle_camera_offset(pawn: Any, manager: Any) -> None:
         _camera_lifecycle=_camera_lifecycle,
         _ladder_active=_ladder_active,
         _reset_mantle_camera_state=_reset_mantle_camera_state,
+        _camera_frame=_camera_frame,
         _set_camera_offset=_set_camera_offset,
         camera_offset_x=camera_offset_x,
         camera_offset_y=camera_offset_y,
@@ -1145,11 +1177,18 @@ from .camera_math import _apply_camera_offset_impl
 
 
 def _apply_camera_offset() -> None:
+    global _camera_frame
     from . import shoulder_blend
-    previous = shoulder_blend.begin(sys.modules[__name__])
+    owner = sys.modules[__name__]
+    previous_frame = _camera_frame
+    previous = shoulder_blend.begin(owner)
+    _camera_frame = {} if (root_height_enabled.value is True or ground_slam_distance_cm.value > 0) else None
     try:
-        return _apply_camera_offset_impl(owner_module=sys.modules[__name__])
+        return _apply_camera_offset_impl(owner_module=owner)
     finally:
+        if _camera_frame is None or not _camera_frame.get('height_visited'):
+            root_height.reset(owner)
+        _camera_frame = previous_frame
         shoulder_blend.end(previous)
 
 
@@ -3072,6 +3111,10 @@ from .ui_and_commands import _emit_gameplay_debug_state
     display_name="Dump Gameplay Debug State",
 )
 def dump_gameplay_debug_state() -> None:
+    from . import camera_height_capture
+
+    if camera_height_capture.trigger(sys.modules[__name__]):
+        return
     from .omni import profiler
 
     if profiler.trigger(sys.modules[__name__]):
@@ -3172,9 +3215,12 @@ def _set_ffyl_mode(value: bool) -> None:
 
 
 def _set_ground_slam_mode(value: bool) -> None:
-    from . import ground_slam_camera
+    from . import ground_slam_camera, ground_slam_distance
 
     requested = value is True
+    if not requested and not ground_slam_distance.shutdown(sys.modules[__name__]):
+        logging.error('[BL4ThirdPersonPOC] GROUND_SLAM_DISTANCE_DISABLE_REFUSED')
+        return
     if not requested and not ground_slam_camera.shutdown("menu_disabled"):
         logging.error(
             "[BL4ThirdPersonPOC] GROUND_SLAM_BETA_DISABLE_REFUSED restoration incomplete"
@@ -3359,6 +3405,10 @@ def omni_movement_console(args: Any) -> None:
             from .omni import profiler
 
             if args.value in ("total", "detail"):
+                from . import camera_height_capture
+
+                if camera_height_capture.status(owner)['state'] != 'off':
+                    raise RuntimeError('Stop the height capture before arming the Omni profiler')
                 profiler.arm(owner, args.value, args.extra or "idle")
             elif args.value == "stop":
                 profiler.cancel(owner)
@@ -3399,6 +3449,35 @@ omni_movement_console.add_argument(
 )
 omni_movement_console.add_argument("value", nargs="?", default=None)
 omni_movement_console.add_argument("extra", nargs="?", default=None)
+
+
+@command("bl4tps_root_height", description="Grounded body height QA: on | off | status")
+def root_height_console(args: Any) -> None:
+    if args.action in ('on', 'off'):
+        _set_root_height_enabled(args.action == 'on')
+    logging.info(f'[BL4ThirdPersonPOC.RootHeight] {root_height.snapshot(sys.modules[__name__])}')
+
+
+root_height_console.add_argument('action', nargs='?', default='status', choices=('on','off','status'))
+
+
+@command("bl4tps_height", description="Camera height diagnostics: arm [label] | off | status; F10 starts/stops")
+def camera_height_console(args: Any) -> None:
+    from . import camera_height_capture
+
+    owner = sys.modules[__name__]
+    try:
+        if args.action == 'arm':
+            camera_height_capture.arm(owner, args.label or 'height')
+        elif args.action == 'off':
+            camera_height_capture.shutdown(owner)
+        logging.info(f'[BL4ThirdPersonPOC.Height] {camera_height_capture.status(owner)}')
+    except Exception as exc:
+        logging.error('[BL4ThirdPersonPOC.Height] COMMAND_FAILED '+repr(exc))
+
+
+camera_height_console.add_argument('action', nargs='?', default='status', choices=('arm','off','status'))
+camera_height_console.add_argument('label', nargs='?', default=None)
 
 
 # Hidden event keybinds that follow the game's configured action keys.
@@ -3645,6 +3724,8 @@ _MOD_COMMANDS = (
     dump_collector_outbound_surface_console,
     dump_ui_publish_topology_console,
     omni_movement_console,
+    camera_height_console,
+    root_height_console,
     dump_input_actions_console,
     report_build_gate_console,
 )
@@ -3677,9 +3758,11 @@ mod = build_mod(
         camera_offset_y,
         camera_offset_z,
         dynamic_motion_camera_enabled,
+        root_height_enabled,
         sniper_tps_ads,
         tps_ffyl_beta,
         tps_ground_slam_beta,
+        ground_slam_distance_cm,
         KeybindOption.from_keybind(toggle_third_person),
         KeybindOption.from_keybind(swap_shoulder),
         KeybindOption.from_keybind(toggle_camera_settings_menu),

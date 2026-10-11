@@ -372,6 +372,27 @@ class AirMixin:
             except Exception as cleanup:
                 logging.error(TAG + ' STOP_FAILED rerun to retry ' + repr(cleanup))
 
+    def configure_air_pose(self, free):
+        # Air facing remains independent. A Slam owns its complete native
+        # upper-body pose, rather than our ordinary jump/lean neutralisation.
+        pose_free = free and not getattr(self, 'ground_slam_pose_native', False)
+        self.aim_native.control[0] = int(pose_free)
+        self.configure_jump_idle(pose_free)
+        node = self.blend_node()
+        if pose_free:
+            if self.blend_original is None or int(node.AlphaInputType) != 1 or bool(node.bAlphaBoolEnabled):
+                raise RuntimeError('Air Lean input no longer matches reviewed free body binding')
+            if not self.blend_pending:
+                if bool(node.bInvertAlpha) != self.blend_original:
+                    raise RuntimeError('Air Lean changed before activation')
+                self.blend_pending = True
+                node.bInvertAlpha = False
+                self.report['game_writes'] += 1
+            if bool(node.bInvertAlpha):
+                raise RuntimeError('Air Lean suppression overwritten')
+        else:
+            self.restore_blend()
+
     def air_frame_observe(self, obj, args, ret, func, reason):
         self.control[8] = 0
         self.dash_branch.control[0] = 0
@@ -390,22 +411,7 @@ class AirMixin:
         self.native.control[0] = 1
         self.native.control[7] = 1
         free = not self.combat['active']
-        self.aim_native.control[0] = int(free)
-        self.configure_jump_idle(free)
-        node = self.blend_node()
-        if free:
-            if self.blend_original is None or int(node.AlphaInputType) != 1 or bool(node.bAlphaBoolEnabled):
-                raise RuntimeError('Air Lean input no longer matches reviewed free body binding')
-            if not self.blend_pending:
-                if bool(node.bInvertAlpha) != self.blend_original:
-                    raise RuntimeError('Air Lean changed before activation')
-                self.blend_pending = True
-                node.bInvertAlpha = False
-                self.report['game_writes'] += 1
-            if bool(node.bInvertAlpha):
-                raise RuntimeError('Air Lean suppression overwritten')
-        else:
-            self.restore_blend()
+        self.configure_air_pose(free)
         if self.air_previous_t is None:
             previous_sample = self.report['samples'][-1] if self.report['samples'] else None
             self.air_hold_yaw = previous_sample['actor_rotation']['Yaw'] if previous_sample else float(self.bound()[1].K2_GetActorRotation().Yaw)

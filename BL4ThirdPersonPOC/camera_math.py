@@ -316,6 +316,7 @@ def _apply_dynamic_motion_camera_offset(
     camera_offset_y,
     camera_offset_z,
     motion_parameters,
+    _camera_frame=None,
 ) -> None:
     if not _dynamic_motion_enabled:
         return
@@ -345,13 +346,24 @@ def _apply_dynamic_motion_camera_offset(
             _dynamic_motion_reset()
             return
         pawn_id = int(pawn._get_address())
-        px, py, pz = _dynamic_motion_point(pawn.K2_GetActorLocation())
-        sx, sy, sz = _dynamic_motion_point(mesh.GetSocketLocation("Spine3"))
+        sample = _camera_frame or {}
+        if sample.get('sample_pawn') == pawn_id and sample.get('sample_mesh') == int(mesh._get_address()):
+            px, py, pz = sample['actor']
+            sx, sy, sz = sample['spine']
+        else:
+            px, py, pz = _dynamic_motion_point(pawn.K2_GetActorLocation())
+            sx, sy, sz = _dynamic_motion_point(mesh.GetSocketLocation("Spine3"))
         yaw = math.radians(float(manager.CameraCachePrivate.POV.Rotation.yaw))
         if not all(map(math.isfinite, (px, py, pz, sx, sy, sz, yaw))):
             _dynamic_motion_reset()
             return
-        relative = (sx - px, sy - py, sz - pz)
+        removed = sample.get('motion_root_z')
+        root_relative = removed is not None
+        removed = float(removed) if root_relative else 0.0
+        if not math.isfinite(removed):
+            _dynamic_motion_reset()
+            return
+        relative = (sx - px, sy - py, sz - pz - removed)
         if (
             _dynamic_motion_state["pawn_id"] != pawn_id
             or _dynamic_motion_state["baseline"] is None
@@ -359,7 +371,16 @@ def _apply_dynamic_motion_camera_offset(
             _dynamic_motion_reset()
             _dynamic_motion_state["pawn_id"] = pawn_id
             _dynamic_motion_state["baseline"] = relative
+            _dynamic_motion_state['root_relative'] = root_relative
+            _dynamic_motion_state['root_removed_z'] = removed
             return
+        # Switch coordinate conventions without adding a fake pose impulse.
+        if _dynamic_motion_state.get('root_relative', False) != root_relative:
+            bx, by, bz = _dynamic_motion_state['baseline']
+            _dynamic_motion_state['baseline'] = (bx, by, bz +
+                _dynamic_motion_state.get('root_removed_z', 0.0) - removed)
+        _dynamic_motion_state['root_relative'] = root_relative
+        _dynamic_motion_state['root_removed_z'] = removed
         baseline = tuple(
             old + (motion_parameters["baseline"] / 100.0) * (new - old)
             for old, new in zip(_dynamic_motion_state["baseline"], relative)
@@ -465,6 +486,7 @@ def _apply_mantle_camera_offset(
     camera_offset_x,
     camera_offset_y,
     camera_offset_z,
+    _camera_frame=None,
 ) -> None:
     """Follow the animated mesh during a mantle after the normal TPS offset."""
     state = _mantle_camera_state
@@ -501,10 +523,17 @@ def _apply_mantle_camera_offset(
 
         px, py, pz = loc(pawn)
         mx, my, mz = loc(mesh)
-        spine_z = float(mesh.GetSocketLocation("Spine3").Z)
+        spine = mesh.GetSocketLocation("Spine3")
+        spine_z = float(spine.Z)
         if not all(math.isfinite(v) for v in (px, py, pz, mx, my, mz, spine_z)):
             _reset_mantle_camera_state()
             return
+        if _camera_frame is not None:
+            sx, sy = float(spine.X), float(spine.Y)
+            if math.isfinite(sx) and math.isfinite(sy):
+                _camera_frame.update(actor=(px, py, pz), mesh=(mx, my, mz),
+                    spine=(sx, sy, spine_z), sample_pawn=pawn_id,
+                    sample_mesh=int(mesh._get_address()))
         previous = state["previous"]
         state["previous"] = (pz, spine_z - pz)
         lag_z = mz - pz + 100.0
@@ -1248,7 +1277,11 @@ def _set_camera_offset_impl(x: float, y: float, z: float, *, owner_module) -> bo
     ):
         return False
     x, y, z = (bounded_number(v, 0.0, -2048.0, 2048.0) for v in (x, y, z))
-    from . import shoulder_blend
+    _pc, pawn, camera_manager = owner_module._get_runtime()
+    if camera_manager is None:
+        return False
+    from . import root_height, shoulder_blend
+    x, y, z = root_height.compensate(owner_module, _pc, pawn, camera_manager, (x, y, z))
     x, y, z = shoulder_blend.compensate(x, y, z)
     from . import respawn_camera
     x, y, z = respawn_camera.compensate_offset(owner_module, (x, y, z))
@@ -1257,11 +1290,8 @@ def _set_camera_offset_impl(x: float, y: float, z: float, *, owner_module) -> bo
     # Hybrid ADS (omni): scope fades act on the final offset.
     from . import hybrid_ads
     x, y, z = hybrid_ads.compensate(owner_module, x, y, z)
-    _pc, pawn, camera_manager = owner_module._get_runtime()
-
-    if camera_manager is None:
-        return False
-
+    from . import ground_slam_distance
+    x, y, z = ground_slam_distance.compensate(owner_module, _pc, pawn, camera_manager, (x, y, z))
     try:
         camera_mode_state = camera_manager.CameraModeState
         camera_mode_state.CameraLocationOffset = make_struct(
@@ -1289,6 +1319,8 @@ def _dynamic_motion_reset_impl(*, owner_module) -> None:
         previous_crouched=None,
         crouch_edge=None,
         crouch_edge_seen_motion=False,
+        root_relative=False,
+        root_removed_z=0.0,
     )
 
 
@@ -1349,6 +1381,8 @@ def _apply_camera_offset_impl(*, owner_module) -> None:
         except Exception as exc:
             mode = f"<query failed: {type(exc).__name__}>"
             fps_view = False
+        from . import ground_slam_distance
+        ground_slam_distance.update(owner_module, _pc, pawn, camera_manager, 'Default' if fps_view else mode)
         if mode != "ThirdPerson" or fps_view:
             owner_module._dynamic_motion_reset()
             owner_module._reset_mantle_camera_state()
@@ -1372,6 +1406,14 @@ def _apply_camera_offset_impl(*, owner_module) -> None:
         )
         owner_module._set_camera_offset(*hip)
         owner_module._apply_mantle_camera_offset(pawn, camera_manager)
+        from . import root_height
+        root_height.prepare(owner_module, _pc, pawn, camera_manager)
+        frame = getattr(owner_module, '_camera_frame', None)
+        if frame and frame.get('owner_changed'):
+            owner_module._dynamic_motion_reset()
+            return
+        if frame and any(frame.get('height_local', ())):
+            owner_module._set_camera_offset(*hip)
         owner_module._apply_dynamic_motion_camera_offset(pawn, camera_manager)
     else:
         owner_module._dynamic_motion_reset()

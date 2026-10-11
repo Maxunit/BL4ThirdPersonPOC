@@ -14,7 +14,9 @@ from .vehicle_handoff import allow_exit_air
 from .inputs import NativeBindings
 from . import settings
 from .. import hybrid_ads
-from .native_rotation import NativeIdleRoot, NativeIdleUpdate, NativeSlideCrouchAimYaw, NativeTrace
+from .native_rotation import NativeIdleRoot, NativeIdleUpdate, NativeTrace
+from .native_free_look import NativeFreeLookAim
+from .free_look import publish as publish_free_look
 from .native_idle_scope import ScopedIdleRoot, ScopedIdleUpdate
 from .native_air_input import LiveAirInputTrace
 from .native_movement import CircleEntry_EntryTrace, DASH_INLINE_SPEC, DashBranchTrace, ENTRY_SPECS, EntryTrace, LiveDirectionTrace, LiveIndexTrace, NativeEntryOwner, ROUTE_CAPACITY, ROUTE_RECORD_SIZE, SPRINT_DIRECTION_SPEC, TRACE_SPECS, VectorEntryTrace
@@ -75,7 +77,9 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
         self.mesh_ref = None
         self.bones = []
         self.report['visual_samples'] = []
-        self.aim_native = NativeSlideCrouchAimYaw(self)
+        self.aim_native = NativeFreeLookAim(self)
+        self.free_look_context = False
+        self.ground_slam_pose_native = False
         self.idle_native = ScopedIdleRoot(self)
         self.idle_update = ScopedIdleUpdate(self)
         self.phase = None
@@ -736,6 +740,7 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
             return
         input_scope = None
         self.open_callback_scope()
+        self.free_look_context = False
         try:
             if not self.mod._third_person_enabled and self.lifecycle_managed:
                 self.lifecycle_supervisor.pause_perspective()
@@ -746,6 +751,12 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
             input_scope.begin_frame(coherent=True)
             if getattr(self, 'staged_bind', False) and self.bind_step(pc, pawn, camera, movement):
                 return
+            self.ground_slam_pose_native = (self.is_ground_slamming(pawn, movement)
+                                           or self.camera_mode(pawn, camera) == 'GroundSlamExit')
+            if self.ground_slam_pose_native:
+                # Release the previous grounded publication before doing air
+                # work. The final publisher keeps these gates closed as well.
+                self.aim_native.control[0] = self.aim_native.crouch_control[0] = 0
             dash = self.is_dashing(pawn)
             self.disarm_ground_vector()
             if self.ground_clip_originals:
@@ -764,6 +775,7 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
             if dash and int(movement.MovementMode) == 1 and self.ground_clip_originals:
                 self.ground_dash_seen = True
             self._ground_pose_frame(obj, args, ret, func)
+            publish_free_look(self)
             self._audit_tick = getattr(self, '_audit_tick', 0) + 1
             self._audit_full = False
         except Exception as exc:

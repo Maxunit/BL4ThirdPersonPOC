@@ -12,8 +12,9 @@ def run():
     from BL4ThirdPersonPOC.omni.session import GameplaySession
     from BL4ThirdPersonPOC.omni.common import KEY
     from BL4ThirdPersonPOC.omni.sampling import SamplingMixin
+    from BL4ThirdPersonPOC.omni.native_free_look import NativeFreeLookAim
 
-    movement = S()
+    movement = S(MovementMode=1, CustomMovementMode=0)
     pawn = S(OakCharacterMovement=movement, IsCharacterDashing=lambda: False)
     pc = S(bShowMouseCursor=False)
     camera = S(GetActorCameraMode=lambda pawn: 'ThirdPerson')
@@ -23,6 +24,8 @@ def run():
     mod._third_person_enabled = mod._third_person_pushed = True
     child = GameplaySession.__new__(GameplaySession)
     child.mod = mod
+    child.aim_native = NativeFreeLookAim(child)
+    child.combat = {}
     child.active, child.busy, child.lifecycle_managed = True, False, True
     child.updates = S(is_game_thread=lambda: True)
     child.refs = tuple(lambda obj=obj: obj for obj in (pc, pawn, camera, movement))

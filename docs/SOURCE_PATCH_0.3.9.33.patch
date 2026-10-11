@@ -1,0 +1,1385 @@
+diff --git a/BL4ThirdPersonPOC/__init__.py b/BL4ThirdPersonPOC/__init__.py
+index 00bf9042a9c794246607b710e930b396660cfebf..42070a4710553dda9dddcc401f86479ad3620b59 100644
+--- a/BL4ThirdPersonPOC/__init__.py
++++ b/BL4ThirdPersonPOC/__init__.py
+@@ -12,7 +12,7 @@ Native lifetime and handoff contracts are described in docs/NATIVE_LIFECYCLE.md.
+ from __future__ import annotations
+ 
+ # Available before build_mod invokes the automatic enable callback.
+-MOD_VERSION = "0.3.9.32"
++MOD_VERSION = "0.3.9.33"
+ HYBRID_ADS_AVAILABLE = True  # optional Hybrid diagnostics QA
+ 
+ import builtins
+diff --git a/BL4ThirdPersonPOC/omni/free_look.py b/BL4ThirdPersonPOC/omni/free_look.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..c0763297bf080617fcb10bbae0f3235a626b326d
+--- /dev/null
++++ b/BL4ThirdPersonPOC/omni/free_look.py
+@@ -0,0 +1,76 @@
++"""Free Omni AimOffset input; angular fade, no timers or extra SDK getters."""
++import math
++import struct
++from .common import angle
++
++YAW_LIMIT = 35.0
++FADE_START = 60.0
++FADE_END = 90.0
++
++
++def pose_input(camera_yaw, actor_yaw):
++    if not math.isfinite(camera_yaw) or not math.isfinite(actor_yaw):
++        raise RuntimeError('Free-look camera/body yaw is nonfinite')
++    relative = angle(camera_yaw, actor_yaw)
++    magnitude = abs(relative)
++    if magnitude <= FADE_START:
++        alpha = 1.0
++    elif magnitude >= FADE_END:
++        alpha = 0.0
++    else:
++        t = (magnitude - FADE_START) / (FADE_END - FADE_START)
++        alpha = 1.0 - t * t * (3.0 - 2.0 * t)
++    yaw = max(-YAW_LIMIT, min(YAW_LIMIT, relative)) * alpha
++    return yaw, alpha
++
++
++def publish(session):
++    """Publish after existing body setters, using this callback's sample only.
++
++    Exact-node/caller filters and the lifecycle's normal disable paths stay in
++    force. Native pitch is multiplied by alpha, retaining the game's sign and
++    pitch input. One aligned uint64 carries both floats, so worker reads do not
++    mix independently published yaw and alpha. This is an update snapshot, not
++    an atomic observation of the whole camera/actor/animation evaluation.
++    """
++    aim = session.aim_native
++    controls = (aim.control, aim.crouch_control)
++    samples = session.report.get('samples', ())
++    sample = samples[-1] if samples else None
++    if (not session.active or session.combat.get('active', False)
++            or (sample is not None and sample.get('combat', {}).get('active', False))):
++        for control in controls:
++            control[0] = 0
++        return
++    eligible = (session.free_look_context
++                and session.impulse_index is not None
++                and session.cycle_start is None and not session.ground_circle_previous_dash
++                and sample is not None and sample['update_index'] == session.frames
++                and sample['normal_tps_sample'] and not sample['combat']['active']
++                and not session.combat['active'])
++    if not eligible:
++        # Retain .32's free special-movement behavior; never reopen a closed gate.
++        for control in controls:
++            if control[0] == 2:
++                control[0] = 1
++        return
++    actor = sample['actor_rotation']
++    if 'crouch_follow' in sample:
++        actor = sample['crouch_follow']['actor_after']
++    elif 'follow' in sample:
++        actor = sample['follow']['immediate_actor_rotation']
++    try:
++        yaw, alpha = pose_input(sample['camera_rotation']['Yaw'], actor['Yaw'])
++        packed = struct.unpack('<Q', struct.pack('<ff', yaw, alpha))[0]
++    except Exception:
++        for control in controls:
++            control[0] = 0
++        raise
++    for control in controls:
++        if control[0] in (1, 2):
++            control[5] = packed
++            control[0] = 2
++    if session.collect_pose_diagnostics:
++        sample['free_look'] = dict(yaw_input=yaw, pitch_alpha=alpha,
++                                   camera_yaw=sample['camera_rotation']['Yaw'],
++                                   actor_yaw=actor['Yaw'])
+diff --git a/BL4ThirdPersonPOC/omni/ground.py b/BL4ThirdPersonPOC/omni/ground.py
+index c4305d95cfcb2e8902f812f82b079c1b9f91d363..ca76da11fb5cba5606e46314d56e8148730110bd 100644
+--- a/BL4ThirdPersonPOC/omni/ground.py
++++ b/BL4ThirdPersonPOC/omni/ground.py
+@@ -507,6 +507,8 @@ class GroundMixin:
+                 raise RuntimeError('Transition outside owned game thread')
+             pc, pawn, camera, movement = self.bound()
+             action, reason = self.classify_handoff(pc, pawn, camera, movement)
++            self.free_look_context = (action == 'RUN' or
++                                      (reason == 'CROUCHED' and not self.is_dashing(pawn)))
+             if action == 'STOP':
+                 self.finish(reason)
+                 return
+diff --git a/BL4ThirdPersonPOC/omni/native_free_look.py b/BL4ThirdPersonPOC/omni/native_free_look.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..5b5072c47c40e9a88d0005f53e816c78ee9c12fe
+--- /dev/null
++++ b/BL4ThirdPersonPOC/omni/native_free_look.py
+@@ -0,0 +1,50 @@
++"""QA extension of the reviewed Aim hook; original workers remain audited."""
++import ctypes
++import hashlib
++import struct
++from .native_rotation import NativeSlideCrouchAimYaw
++
++# Assembled from docs/omni/native_validation/free_look_prefix.s, without
++# relocations. Both copies retain the exact receiver/caller filters and the
++# existing yaw-only mode. Only mode 2 changes the caller's yaw/pitch temporary.
++FREE_LOOK_PREFIX = bytes.fromhex(
++    '9c50415249ba1111111111111111493b4a080f8502010000488b442418493b42100f85f30000004885d20f84ea000000f049ff422049833a010f84cf00000049833a020f85d10000004883ec40f30f7f0424f30f7f4c2410f30f7f5424200fae5c24308b4424300d801f0000894424340fae542434498b4228660f6ec0f30f5ac048c1e820660f6ec8f30f5ac9660f2ec07a5f660f2e05850000007755660f2e0583000000724b660f2ec97a45660f2e0d7b000000773b660f2e0d790000007231f20f105208660f2ed27a26660f2e156c000000771c660f2e156a0000007212f20f59d1f20f1102f20f115208f049ff42180fae542430f30f6f0424f30f6f4c2410f30f6f5424204883c440eb0c48c70200000000f049ff4218415a589deb30000000000080414000000000008041c0000000000000f03f0000000000000000000000000080664000000000008066c0')
++FREE_LOOK_HASH = '5b7ede243c2774c4fbe365bfbc231e72cc70bd3a02e1304decd7a151f6648163'
++
++
++class NativeFreeLookAim(NativeSlideCrouchAimYaw):
++    PREFIX = FREE_LOOK_PREFIX * 2
++    PREFIX_SIZE = 672
++    HASH = 'a91817d3c27fe26e589a954b067726d7bfaabc6dea12064876681bb097cdca55'
++
++    def __init__(self, capture):
++        super().__init__(capture)
++        self.control = (ctypes.c_uint64 * 6)()
++        self.crouch_control = (ctypes.c_uint64 * 6)()
++        self.control._slide_crouch_control = self.crouch_control
++
++    def prefix_code(self):
++        if (len(FREE_LOOK_PREFIX) != 336
++                or hashlib.sha256(FREE_LOOK_PREFIX).hexdigest() != FREE_LOOK_HASH
++                or FREE_LOOK_PREFIX.count(b'\x11' * 8) != 1):
++            raise RuntimeError('Free-look instruction template audit differs')
++        return b''.join(FREE_LOOK_PREFIX.replace(
++            b'\x11' * 8, struct.pack('<Q', ctypes.addressof(control)))
++            for control in (self.control, self.crouch_control))
++
++    def install(self):
++        # Retain all existing Steam fingerprint, reflection, axes, exact caller,
++        # vtable, code-page, installation readback and restoration checks.
++        super().install()
++        scope = ('Exact owned normal/crouch node and reviewed caller only. '
++                 'Mode 1: zero yaw, preserve pitch (.32 special movement). '
++                 'Mode 2: single packed yaw/alpha publication; replace temporary '
++                 'yaw and multiply original pitch. Preserve roll, arguments, '
++                 'GPRs, XMM0-2, MXCSR and flags. No Python on animation workers.')
++        self.capture.report['aim_native_binding']['scope'] = scope
++        self.capture.report['crouch_aim_native_binding']['scope'] = scope
++        self.capture.report['free_look_settings'] = dict(
++            yaw_input_limit_degrees=35, fade_start_degrees=60,
++            neutral_from_degrees=90, additional_native_patches=0,
++            source='current callback camera and post-follow actor sample',
++            scope='free grounded Omni, standing/crouched; angular smoothstep')
+diff --git a/BL4ThirdPersonPOC/omni/session.py b/BL4ThirdPersonPOC/omni/session.py
+index 2a45d0eaaa97bc9f06e73573852af539a1dfdfd3..a9f5809f530bfc464a3d5ab3ccecb93963e48802 100644
+--- a/BL4ThirdPersonPOC/omni/session.py
++++ b/BL4ThirdPersonPOC/omni/session.py
+@@ -14,7 +14,9 @@ from .vehicle_handoff import allow_exit_air
+ from .inputs import NativeBindings
+ from . import settings
+ from .. import hybrid_ads
+-from .native_rotation import NativeIdleRoot, NativeIdleUpdate, NativeSlideCrouchAimYaw, NativeTrace
++from .native_rotation import NativeIdleRoot, NativeIdleUpdate, NativeTrace
++from .native_free_look import NativeFreeLookAim
++from .free_look import publish as publish_free_look
+ from .native_idle_scope import ScopedIdleRoot, ScopedIdleUpdate
+ from .native_air_input import LiveAirInputTrace
+ from .native_movement import CircleEntry_EntryTrace, DASH_INLINE_SPEC, DashBranchTrace, ENTRY_SPECS, EntryTrace, LiveDirectionTrace, LiveIndexTrace, NativeEntryOwner, ROUTE_CAPACITY, ROUTE_RECORD_SIZE, SPRINT_DIRECTION_SPEC, TRACE_SPECS, VectorEntryTrace
+@@ -75,7 +77,8 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
+         self.mesh_ref = None
+         self.bones = []
+         self.report['visual_samples'] = []
+-        self.aim_native = NativeSlideCrouchAimYaw(self)
++        self.aim_native = NativeFreeLookAim(self)
++        self.free_look_context = False
+         self.idle_native = ScopedIdleRoot(self)
+         self.idle_update = ScopedIdleUpdate(self)
+         self.phase = None
+@@ -736,6 +739,7 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
+             return
+         input_scope = None
+         self.open_callback_scope()
++        self.free_look_context = False
+         try:
+             if not self.mod._third_person_enabled and self.lifecycle_managed:
+                 self.lifecycle_supervisor.pause_perspective()
+@@ -764,6 +768,7 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
+             if dash and int(movement.MovementMode) == 1 and self.ground_clip_originals:
+                 self.ground_dash_seen = True
+             self._ground_pose_frame(obj, args, ret, func)
++            publish_free_look(self)
+             self._audit_tick = getattr(self, '_audit_tick', 0) + 1
+             self._audit_full = False
+         except Exception as exc:
+diff --git a/BL4ThirdPersonPOC/pyproject.toml b/BL4ThirdPersonPOC/pyproject.toml
+index 5ffad8b769af1fbcd691b3b0ea641494a264ef83..b9a0d64619586480417e3fdcf68ed9553d3bc64f 100644
+--- a/BL4ThirdPersonPOC/pyproject.toml
++++ b/BL4ThirdPersonPOC/pyproject.toml
+@@ -1,12 +1,12 @@
+ [project]
+ name = "BL4ThirdPersonPOC"
+-version = "0.3.9.32"
++version = "0.3.9.33"
+ description = "Third-person camera mod for Borderlands 4 with hybrid ADS, beta FFYL/Ground Slam and experimental omnidirectional movement."
+ authors = [{ name = "Maxunit & Kira" }]
+ 
+ [tool.sdkmod]
+ name = "BL4 Third Person PoC"
+-version = "0.3.9.32"
++version = "0.3.9.33"
+ supported_games = ["BL4"]
+ coop_support = "ClientSide"
+ 
+diff --git a/README.md b/README.md
+index 0955019d69cd59a051d08cf248c2f136df19b4c5..94ad151dcdb33db3c728c31d201c936e8825d54a 100644
+--- a/README.md
++++ b/README.md
+@@ -1,16 +1,20 @@
+-# BL4ThirdPersonPOC 0.3.9.32 Vehicle Facing QA
+-
+-Basiert auf der Repo-.31, Commit `001a62a45d7f9307f1b91088e7b25bfba63d0941`.
+-Beim Ausstieg gilt jetzt die Fahrzeugausrichtung bei jedem Tempo, einschließlich
+-kurzer WASD-Tipps, Rückwärtsfahrt und Drift. Der Summon-Publisher verwendet die
+-aktuelle Actor-Rotation der Figur statt ihrer letzten Bewegungseingabe.
+-Der bestehende Native-Ausstiegsbericht enthält den tatsächlich angewandten Yaw.
+-Die Lichtschützen-Kamera-Korrektur und die Performance-Arbeit der Repo-.31 sind
+-enthalten. Spieltest der beiden verbleibenden Fehler erforderlich.
+-
+-- [Befund und Änderungen](docs/CHANGELOG_0.3.9.32_VEHICLE_FACING_QA.md)
+-- [Kurzer Spieltest](docs/TESTPLAN_0.3.9.32_VEHICLE_FACING_QA.md)
+-- [Lokale Validierung](docs/VALIDATION_0.3.9.32_VEHICLE_FACING_QA.md)
++# BL4ThirdPersonPOC 0.3.9.33 Omni Free Look QA
++
++Basiert auf .32, lokalem QA-Checkpoint
++`d9c63d4` (Repo-.31: `001a62a45d7f9307f1b91088e7b25bfba63d0941`).
++Beim freien Omni-Umschauen darf der Oberkörper seitlich mitdrehen: Aim-Eingabe
++höchstens ±35°. Körperneigung und Drehung blenden zwischen 60° und 90°
++Kameraverdrehung relativ zur Figur weich aus. Ab der Seitenansicht ist dieser
++kamerabedingte Aim-Anteil neutral. Gilt im normalen, freien Omni am Boden,
++stehend und geduckt. Zielen und Schießen geben die Aim-Pose weiterhin ans Spiel.
++Die Fahrzeugkorrektur der .32 ist vollständig enthalten; Ben hat beim ersten
++Spieltest mit Lichtschütze und Manta korrekte Ein-/Ausstiegsrichtungen bestätigt.
++Die neue Oberkörperbewegung braucht noch ihren Spieltest.
++
++- [Änderungen](docs/CHANGELOG_0.3.9.33_OMNI_FREE_LOOK_QA.md)
++- [Kurzer Spieltest](docs/TESTPLAN_0.3.9.33_OMNI_FREE_LOOK_QA.md)
++- [Lokale Validierung](docs/VALIDATION_0.3.9.33_OMNI_FREE_LOOK_QA.md)
++- Vorgänger: [0.3.9.32 Vehicle Facing](docs/CHANGELOG_0.3.9.32_VEHICLE_FACING_QA.md)
+ - Vorgänger: [0.3.9.31 Summon Seat](docs/CHANGELOG_0.3.9.31_SUMMON_SEAT_QA.md)
+ - Vorgänger: [0.3.9.30 Exit Facing](docs/CHANGELOG_0.3.9.30_VEHICLE_EXIT_FACING_QA.md),
+   [0.3.9.29 Bind & Hitch](docs/CHANGELOG_0.3.9.29_OMNI_BIND_HITCH_QA.md),
+diff --git a/docs/CHANGELOG_0.3.9.33_OMNI_FREE_LOOK_QA.md b/docs/CHANGELOG_0.3.9.33_OMNI_FREE_LOOK_QA.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..a134d7f0af412994506c41d05f2e2da34fd1f2e5
+--- /dev/null
++++ b/docs/CHANGELOG_0.3.9.33_OMNI_FREE_LOOK_QA.md
+@@ -0,0 +1,50 @@
++# 0.3.9.33 – Omni Free Look QA
++
++Ziel: Beim freien Omni-Umschauen darf die Kamera vor der Figur sein, ohne deren
++Oberkörper weiterhin nach Kamera-Pitch zu neigen. Hinter der Figur darf sich der
++Oberkörper wieder begrenzt seitlich mitdrehen.
++
++## Verhalten
++
++- Kamera-Yaw relativ zum aktuellen Actor-Yaw; Welt-Richtung und ±180°-Übergang
++  beeinflussen die Grenze nicht. Vorhandene Kamera-Samples werden verwendet.
++- Aim-Yaw-Eingabe maximal ±35°. Bis ±60° Kamerawinkel bleibt Pitch unverändert.
++- Zwischen 60° und 90°: gemeinsames, winkelabhängiges Smoothstep-Ausblenden von
++  begrenzter Drehung und Pitch. Ab 90° bis zur Frontansicht sind beide neutral.
++- Die 35° begrenzen die AimOffset-Eingabe, nicht direkt den Winkel eines Bones.
++  Der sichtbare Umfang und die anatomische Drehrichtung brauchen den Spieltest.
++- Freies Omni am Boden, stehend oder geduckt, nach Aktivierung des Body-Follow.
++  Die vorhandene Kampfentscheidung bleibt zuständig für ADS/Feuern/Werfen.
++  Luft, Dash, Slide und Slide-Ausgang behalten ihre bisherige Aim-Behandlung.
++- Kein zeitliches Nachlaufen: Der sanfte Übergang kommt aus dem Kamerawinkel.
++  Normales TPS ohne Omni verwendet weiterhin seine Spielanimation.
++
++## Umsetzung
++
++`omni/free_look.py` veröffentlicht nach der bestehenden Body-Pipeline. Nach einem
++Body-Setter wird dessen tatsächlicher Readback verwendet; im Idle der aktuelle
++Sample. Ein aus zwei float32 bestehendes uint64 enthält Ziel-Yaw und Pitch-Faktor.
++Der Animationsthread liest beides mit einem einzigen ausgerichteten 64-Bit-Load.
++Es gibt keine neuen SDK-Getter, Timer, Ticks oder Eingabebelegungen.
++
++`omni/native_free_look.py` erweitert den vorhandenen, exakt gebundenen Aim-Hook.
++Mode 1 erhält den bisherigen Eingriff (Yaw null, Pitch unverändert). Mode 2
++ersetzt im temporären Eingabevektor Yaw und multipliziert ursprünglichen Pitch.
++Der dritte Wert, Argumente, GPRs, XMM0–2, MXCSR und Flags werden erhalten.
++Beschädigte Werte führen im neuen Modus zu keinem Schreiben.
++
++Normal- und Crouch-Knoten behalten Receiver-/Caller-Filter, Bind-Prüfungen,
++Steam-Build-Fingerprint, vtable-/Code-Prüfungen sowie Owned-Restore. Kein neuer
++Patch-Ort oder RVA. Beide Controls bleiben über den veröffentlichten Haupt-Control
++gepinnt. Die ursprünglichen Native-Klassen und deren Audit sind unverändert.
++Assemblerquelle und ausführbare Linux-Testfixture liegen im Native-Validation-Ordner.
++
++Kamera, Body und Animation sind weiterhin Update-Snapshots. Die atomare Übergabe
++verhindert gemischte Yaw/Faktor-Pakete, macht diese Spielbeobachtungen aber nicht
++zu einer gemeinsamen atomaren Aufnahme. Die alten Report-Zähler
++`aim_yaw_neutralizations` zählen jetzt auch die begrenzten Mode-2-Eingriffe.
++Der ältere Phasenname `B_NEUTRAL_YAW` bezeichnet weiterhin die freie Basisphase.
++Mit Pose-Diagnose enthält der aktuelle Sample zusätzlich `free_look`.
++
++Die Dateien der Fahrzeugkorrektur .32 sind bytegleich. Weder die ADS-/Reticle-
++Steuerung noch die bestehenden Bewegungseingaben wurden geändert.
+diff --git a/docs/PACKAGE_SHA256_0.3.9.33.json b/docs/PACKAGE_SHA256_0.3.9.33.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..9a09a068b080cc1487482dc929a5d67272fef032
+--- /dev/null
++++ b/docs/PACKAGE_SHA256_0.3.9.33.json
+@@ -0,0 +1,245 @@
++{
++  "version": "0.3.9.33",
++  "local_base_commit": "d9c63d4640d03f9da5116ef6ab68d8caddb11c3e",
++  "github_base_commit": "001a62a45d7f9307f1b91088e7b25bfba63d0941",
++  "base_version": "0.3.9.32",
++  "changed_production_files": [
++    "BL4ThirdPersonPOC/__init__.py",
++    "BL4ThirdPersonPOC/omni/ground.py",
++    "BL4ThirdPersonPOC/omni/session.py",
++    "BL4ThirdPersonPOC/pyproject.toml"
++  ],
++  "added_production_files": [
++    "BL4ThirdPersonPOC/omni/free_look.py",
++    "BL4ThirdPersonPOC/omni/native_free_look.py"
++  ],
++  "unchanged_production_files": [
++    "BL4ThirdPersonPOC/_reticle_publish.py",
++    "BL4ThirdPersonPOC/action_keys.py",
++    "BL4ThirdPersonPOC/ads_control.py",
++    "BL4ThirdPersonPOC/ads_events.py",
++    "BL4ThirdPersonPOC/ads_handoff.py",
++    "BL4ThirdPersonPOC/ads_qa_snapshot.py",
++    "BL4ThirdPersonPOC/ads_zoom_modifiers.py",
++    "BL4ThirdPersonPOC/ads_zoom_settings.py",
++    "BL4ThirdPersonPOC/assets/Anton-Regular.ttf",
++    "BL4ThirdPersonPOC/assets/BarlowCondensed-Medium.ttf",
++    "BL4ThirdPersonPOC/assets/OFL-Anton.txt",
++    "BL4ThirdPersonPOC/assets/OFL-BarlowCondensed.txt",
++    "BL4ThirdPersonPOC/assets/button_active.png",
++    "BL4ThirdPersonPOC/assets/button_normal.png",
++    "BL4ThirdPersonPOC/assets/console_backdrop.png",
++    "BL4ThirdPersonPOC/assets/console_frame.png",
++    "BL4ThirdPersonPOC/assets/icon_aiming.png",
++    "BL4ThirdPersonPOC/assets/icon_camera.png",
++    "BL4ThirdPersonPOC/assets/icon_motion.png",
++    "BL4ThirdPersonPOC/assets/shoulder_hunter.png",
++    "BL4ThirdPersonPOC/assets/vector_sources/button_active.svg",
++    "BL4ThirdPersonPOC/assets/vector_sources/button_normal.svg",
++    "BL4ThirdPersonPOC/assets/vector_sources/console_backdrop.svg",
++    "BL4ThirdPersonPOC/assets/vector_sources/console_frame.svg",
++    "BL4ThirdPersonPOC/assets/vector_sources/icon_aiming.svg",
++    "BL4ThirdPersonPOC/assets/vector_sources/icon_camera.svg",
++    "BL4ThirdPersonPOC/assets/vector_sources/icon_motion.svg",
++    "BL4ThirdPersonPOC/build_gate.py",
++    "BL4ThirdPersonPOC/camera_events.py",
++    "BL4ThirdPersonPOC/camera_hook_chain.py",
++    "BL4ThirdPersonPOC/camera_math.py",
++    "BL4ThirdPersonPOC/ffyl_camera_events.py",
++    "BL4ThirdPersonPOC/ffyl_camera_owner.py",
++    "BL4ThirdPersonPOC/ffyl_down_state.py",
++    "BL4ThirdPersonPOC/ffyl_entry_blend.py",
++    "BL4ThirdPersonPOC/ffyl_legacy_camera.py",
++    "BL4ThirdPersonPOC/ffyl_recoil_context.py",
++    "BL4ThirdPersonPOC/ffyl_recoil_guard.py",
++    "BL4ThirdPersonPOC/ffyl_recoil_ownership.py",
++    "BL4ThirdPersonPOC/ffyl_strategy_controller.py",
++    "BL4ThirdPersonPOC/ffyl_strategy_runtime.py",
++    "BL4ThirdPersonPOC/ffyl_strategy_selection.py",
++    "BL4ThirdPersonPOC/game_hooks.py",
++    "BL4ThirdPersonPOC/ground_slam_camera.py",
++    "BL4ThirdPersonPOC/hidden_vehicle_camera.py",
++    "BL4ThirdPersonPOC/hybrid_ads.py",
++    "BL4ThirdPersonPOC/input_bindings.py",
++    "BL4ThirdPersonPOC/interaction_runtime.py",
++    "BL4ThirdPersonPOC/item_card_runtime.py",
++    "BL4ThirdPersonPOC/menu_camera_features.py",
++    "BL4ThirdPersonPOC/menu_console.py",
++    "BL4ThirdPersonPOC/mod_shutdown.py",
++    "BL4ThirdPersonPOC/motion_settings.py",
++    "BL4ThirdPersonPOC/native_aim_origin.py",
++    "BL4ThirdPersonPOC/native_beam_collision.py",
++    "BL4ThirdPersonPOC/native_beam_origin.py",
++    "BL4ThirdPersonPOC/native_beam_rear_blocker.py",
++    "BL4ThirdPersonPOC/native_hook_lifecycle.py",
++    "BL4ThirdPersonPOC/native_ladder_guard.py",
++    "BL4ThirdPersonPOC/native_lifecycle.py",
++    "BL4ThirdPersonPOC/native_memory.py",
++    "BL4ThirdPersonPOC/native_recoil.py",
++    "BL4ThirdPersonPOC/native_weapon_probe.py",
++    "BL4ThirdPersonPOC/npc_camera_visibility.py",
++    "BL4ThirdPersonPOC/npc_native_resume.py",
++    "BL4ThirdPersonPOC/omni/__init__.py",
++    "BL4ThirdPersonPOC/omni/air.py",
++    "BL4ThirdPersonPOC/omni/animation.py",
++    "BL4ThirdPersonPOC/omni/carry_throw_handoff.py",
++    "BL4ThirdPersonPOC/omni/combat_handoff.py",
++    "BL4ThirdPersonPOC/omni/common.py",
++    "BL4ThirdPersonPOC/omni/diagnostics.py",
++    "BL4ThirdPersonPOC/omni/grenade_facing.py",
++    "BL4ThirdPersonPOC/omni/hitch.py",
++    "BL4ThirdPersonPOC/omni/inputs.py",
++    "BL4ThirdPersonPOC/omni/lifecycle.py",
++    "BL4ThirdPersonPOC/omni/native_air_input.py",
++    "BL4ThirdPersonPOC/omni/native_fire_activity.py",
++    "BL4ThirdPersonPOC/omni/native_idle_scope.py",
++    "BL4ThirdPersonPOC/omni/native_movement.py",
++    "BL4ThirdPersonPOC/omni/native_rotation.py",
++    "BL4ThirdPersonPOC/omni/profiler.py",
++    "BL4ThirdPersonPOC/omni/rebind_cache.py",
++    "BL4ThirdPersonPOC/omni/sampling.py",
++    "BL4ThirdPersonPOC/omni/settings.py",
++    "BL4ThirdPersonPOC/omni/slam.py",
++    "BL4ThirdPersonPOC/omni/slide.py",
++    "BL4ThirdPersonPOC/omni/summon_seat.py",
++    "BL4ThirdPersonPOC/omni/throw_handoff.py",
++    "BL4ThirdPersonPOC/omni/vehicle_exit.py",
++    "BL4ThirdPersonPOC/omni/vehicle_handoff.py",
++    "BL4ThirdPersonPOC/omni/vehicle_summon.py",
++    "BL4ThirdPersonPOC/omni/visual_guard.py",
++    "BL4ThirdPersonPOC/omni/weapon_fire_diagnostics.py",
++    "BL4ThirdPersonPOC/pickup_registry.py",
++    "BL4ThirdPersonPOC/placeable_targeting.py",
++    "BL4ThirdPersonPOC/respawn_camera.py",
++    "BL4ThirdPersonPOC/runtime_updates.py",
++    "BL4ThirdPersonPOC/settings_validation.py",
++    "BL4ThirdPersonPOC/shoulder_blend.py",
++    "BL4ThirdPersonPOC/tps_recovery.py",
++    "BL4ThirdPersonPOC/ui_and_commands.py",
++    "BL4ThirdPersonPOC/vehicle_camera.py",
++    "BL4ThirdPersonPOC/vehicle_control.py"
++  ],
++  "tests": {
++    "total": 517,
++    "passed": 513,
++    "skipped": 4
++  },
++  "sdkmod_sha256": "9823a1a317600918014c184f7acf5d567b29c95a2c6d2045f46f225c7347a7b1",
++  "sdkmod_files": 110,
++  "source_sha256": {
++    "BL4ThirdPersonPOC/__init__.py": "db3306db5d2b60e4bf40431d0627eb18bf1bd4be5b5b7bed0cdcf94ec9f1d88a",
++    "BL4ThirdPersonPOC/_reticle_publish.py": "100ec2a6d80314e4802dd1c3ea9cab49118ed2b70ab8ca58c8d33cf2ca79b817",
++    "BL4ThirdPersonPOC/action_keys.py": "0229341f7858425496c6cd1c636afcae43f1427d5d1c27e0b22341b06081dd1c",
++    "BL4ThirdPersonPOC/ads_control.py": "3812f79ca993c18369415dd68a52961f571121ffb919aab80258c71f08c81448",
++    "BL4ThirdPersonPOC/ads_events.py": "82546d006fc49f187fed7af4fa4962a5256fd977f9e715baa2447cffae89fa2d",
++    "BL4ThirdPersonPOC/ads_handoff.py": "43cb69abeb23d67fca262329236935eb221441e831de9946d1fb2bb7cc32d4ff",
++    "BL4ThirdPersonPOC/ads_qa_snapshot.py": "eed5a27d7ff3a2f3987a64b137efbe1a69b05b12bcf73f64f19d94e7e10ba936",
++    "BL4ThirdPersonPOC/ads_zoom_modifiers.py": "6cb770d6c8da7406ce379b22401dbb09ac07a92d54adb6083ab6303f541b9b23",
++    "BL4ThirdPersonPOC/ads_zoom_settings.py": "5f2669282659c708f12975efda40c8141e96a483cfbe8a200e299989647e8f8a",
++    "BL4ThirdPersonPOC/assets/Anton-Regular.ttf": "a4ba3a92350ebb031da0cb47630ac49eb265082ca1bc0450442f4a83ab947cab",
++    "BL4ThirdPersonPOC/assets/BarlowCondensed-Medium.ttf": "262bd143292ce479ee0cd09a42b47ab173fca8e9c6eb5ed0b5c8a845bc371d17",
++    "BL4ThirdPersonPOC/assets/OFL-Anton.txt": "9267baca92b7a7ce9db6dd9e6cc32c9fe3ddf1ac96e421d5f87c5746b9089d6a",
++    "BL4ThirdPersonPOC/assets/OFL-BarlowCondensed.txt": "10b0e6bb43166a50fbe7cde2895bd7f703738a5da843acb5c97c95dc9ea26817",
++    "BL4ThirdPersonPOC/assets/button_active.png": "00aa78d8b560324f45a01ffefaa924d42bac679257927fcd4b6ffbdacb71dd4c",
++    "BL4ThirdPersonPOC/assets/button_normal.png": "0995a3ff8fdda7908ff42a918d8328c858cf8f835b4981a954adf520cba46fb6",
++    "BL4ThirdPersonPOC/assets/console_backdrop.png": "fca8b1ae5dcdf199364cdc09acf9b93dca17cf9352b3b68b0f356e125cb2b177",
++    "BL4ThirdPersonPOC/assets/console_frame.png": "3b5a45ceb48c8645bd8a7b83976d65dd50e7940d46d6d10247aa36467bd4fb24",
++    "BL4ThirdPersonPOC/assets/icon_aiming.png": "e2a56ce7ab487bc15d058342b1c1f0dcbc685cf7e0c8d2c4ca6003006922c119",
++    "BL4ThirdPersonPOC/assets/icon_camera.png": "83f8b596d8634792a117269acf5435c5bc15f49c3b263211ae7743b6b0f995d3",
++    "BL4ThirdPersonPOC/assets/icon_motion.png": "b6ef27977eb240be7f81bd329d0530e9b31f8bb0cdc92daacecb99e58e76cf07",
++    "BL4ThirdPersonPOC/assets/shoulder_hunter.png": "5c6234eccbdb0d21f1f5d674b5db4541d100079f76399a4d92480c05eb33a0e8",
++    "BL4ThirdPersonPOC/assets/vector_sources/button_active.svg": "b1a2b48f81cde53ce1ab7a20ae2163fdeb7b2c5635c1a8b3dff1f316acdd9eab",
++    "BL4ThirdPersonPOC/assets/vector_sources/button_normal.svg": "f0e52459f3dae43fde0c38ebcb133659338ccb06350473e7d3e33b02aec389ba",
++    "BL4ThirdPersonPOC/assets/vector_sources/console_backdrop.svg": "4890ff7fd59c22ac846d889d056bf5dacf8140fdda1e60fbbbbdf1f13bb2874d",
++    "BL4ThirdPersonPOC/assets/vector_sources/console_frame.svg": "cddc2dc6769172eb40e82b815da6b4ed38b1ab9a317fa0288791c81a274aa42d",
++    "BL4ThirdPersonPOC/assets/vector_sources/icon_aiming.svg": "a39024bd526d440e17ee7599c08071ddabd34309e8d4d3364d507a8b6d34d086",
++    "BL4ThirdPersonPOC/assets/vector_sources/icon_camera.svg": "5a1975617b354e5c3a9b0d1a8a0d9bb1af9e8b0fd08f371752f8e052ee63ecd3",
++    "BL4ThirdPersonPOC/assets/vector_sources/icon_motion.svg": "d9eff1fad7538baab6cc5059b5f1b9cd0ead01bde3c4ed0d727f29030d4c17d4",
++    "BL4ThirdPersonPOC/build_gate.py": "912a18d7b3a3608d5ad13b93f32ffa0a1877de3b3ddb714fc8950d43f60e9fdb",
++    "BL4ThirdPersonPOC/camera_events.py": "b8914e609ca4495f11e3c0f63e64ae951a7ed7c955c586ca68303b89dd1c2bfd",
++    "BL4ThirdPersonPOC/camera_hook_chain.py": "e6aae86b266a35852bb5dd59594583df7faf9a7fb7a47a861134b3e400e4cbd5",
++    "BL4ThirdPersonPOC/camera_math.py": "c0590bc1fd971fc8a2e8e193fc09ec4ff11c97c87ccdae5fa6c0abda05e73bb6",
++    "BL4ThirdPersonPOC/ffyl_camera_events.py": "16d478b4ec75dde84003e7735e1de40297607cc9110c5f74593a9f66632a8556",
++    "BL4ThirdPersonPOC/ffyl_camera_owner.py": "baf0883faafbdcc894ae535246d683ecd0d75ce18c795ac1383dfea19529c905",
++    "BL4ThirdPersonPOC/ffyl_down_state.py": "19785dd94f93d62d0eb85687943c3b656d14b63f16c5b8db5b86aa6d20be6486",
++    "BL4ThirdPersonPOC/ffyl_entry_blend.py": "6a7e8ed836a44f705f5a916dc6ca4e867cf5b1ef9506304f7a8ad9c577d8a3e0",
++    "BL4ThirdPersonPOC/ffyl_legacy_camera.py": "5e989effb3cff4082c26c791890f4822c802789d1589bb5b408b6004de9233d3",
++    "BL4ThirdPersonPOC/ffyl_recoil_context.py": "cbf3ad3b1ad1fac3045f43cf4dcfe46280a40d3156d9f4675cbdc52cbd7854d0",
++    "BL4ThirdPersonPOC/ffyl_recoil_guard.py": "564047161fe96fe5bd5187f1440af458cac5cc68ed4d4479ce379eeb6c818323",
++    "BL4ThirdPersonPOC/ffyl_recoil_ownership.py": "833cf3c64ba38d77a7ca4e9d6ab2b9aaa66bbf8a81f5bc16efbe6f56f21cb266",
++    "BL4ThirdPersonPOC/ffyl_strategy_controller.py": "3fc4a96a6332cfe84a3afb8dab3d431e1d8975b828e99342dee35b7edfe13078",
++    "BL4ThirdPersonPOC/ffyl_strategy_runtime.py": "5db5745e9e9ab97e528c3d3fa8e6c175bf2541162bfd90313cecf11f57965459",
++    "BL4ThirdPersonPOC/ffyl_strategy_selection.py": "24ee332f7ab23dc0da1f48cdba83f0a8898bb99bbd44a066ecbf5ef5569357d2",
++    "BL4ThirdPersonPOC/game_hooks.py": "1345c3ac24ee3a8c31385a3d4d42d9950c88c1c4e6726d1c889a31e168829294",
++    "BL4ThirdPersonPOC/ground_slam_camera.py": "fabd1cb8d25858b0fa98460a25bc266045cb267a86fc3cb85881e72121bf1fea",
++    "BL4ThirdPersonPOC/hidden_vehicle_camera.py": "408f81e042036028ae97fc6964ba9760b62de553ee11202cf47ac3ed0e2d8466",
++    "BL4ThirdPersonPOC/hybrid_ads.py": "840b567a08549bbe3da05e334f46e8c0473e3fb8e8d2cb71f9603131e55583cc",
++    "BL4ThirdPersonPOC/input_bindings.py": "5ae6dbbe2ebffb98827ba2a6bb4a4e0e4e09686177744cf238a03b80799af2bd",
++    "BL4ThirdPersonPOC/interaction_runtime.py": "45ec61ddb3031c22a178f3b9653c5dd067eecc8993ca3f1d865c36a09cfd1b43",
++    "BL4ThirdPersonPOC/item_card_runtime.py": "26d195fbc0e3060aa078db7ff8a081e1b6426789133fd89de0c3a804d8b1beee",
++    "BL4ThirdPersonPOC/menu_camera_features.py": "9fd94f34ebf77ff3a8b2436448239c91baac747e59f0dc76fce6c04e3d927d9e",
++    "BL4ThirdPersonPOC/menu_console.py": "ca3ad1da17ce6abdfb5d565486cc6ac7a33d31d71895ba12c2407e91d4f758a5",
++    "BL4ThirdPersonPOC/mod_shutdown.py": "6289b036a88f223a90ec0450519e22597572c39cebbf9a81b0a5b9840daf55f6",
++    "BL4ThirdPersonPOC/motion_settings.py": "97d7e51c052009abf33f934cfd2116f8430c76c02a4c59c9d129fa8d02b56e7d",
++    "BL4ThirdPersonPOC/native_aim_origin.py": "d3a068f12c0d5ea0e9e8ffec692784dec13e1ac63d0d6bcf1bcb7b3b464d521c",
++    "BL4ThirdPersonPOC/native_beam_collision.py": "3f393b23d27a174b77927e8478d689108b96b2e7535293ad43bf71a6858f0c93",
++    "BL4ThirdPersonPOC/native_beam_origin.py": "324798ebe6caca24fb576ff17cd8815960d842467e06bed029732fa5c2258939",
++    "BL4ThirdPersonPOC/native_beam_rear_blocker.py": "3a2a6cbe5b5cf4e261c860aad2ce0f7f38f8cbed16711f0d727902e7d53990f3",
++    "BL4ThirdPersonPOC/native_hook_lifecycle.py": "0a00124d5a0dd431402c22e017f42b2fb2cf35378bcb4df4c28a44b550fc0bd1",
++    "BL4ThirdPersonPOC/native_ladder_guard.py": "2fc9b08e50f1c4e5af364dd77650ab5e75dc97633dd4910f9a20d57b891f5cab",
++    "BL4ThirdPersonPOC/native_lifecycle.py": "0b3151f5464f04b473a5cdc2750775bcfb728cca6dc5a97faa010a6e54e48bd9",
++    "BL4ThirdPersonPOC/native_memory.py": "77131023dcfabfc1245d35c10b034c8563f7adddce7b39616974d03991e28af2",
++    "BL4ThirdPersonPOC/native_recoil.py": "b057dcc17acfc92d2419a372697726889de5a2c6f749c5d210daffcec1f7960b",
++    "BL4ThirdPersonPOC/native_weapon_probe.py": "db684423ec768b8d565abcdfc64ce0ab3ca5773a7fa43a69a6675926223ed6b1",
++    "BL4ThirdPersonPOC/npc_camera_visibility.py": "257c701ab2811960962756bb716ece2da03e4dbeb58227a4a03fdc9ee2e47c97",
++    "BL4ThirdPersonPOC/npc_native_resume.py": "03a87e8dd03dba5361992749be8c65aedd3bf491fa998211fe9684eb9f20f727",
++    "BL4ThirdPersonPOC/omni/__init__.py": "bfd3138cd169361a27dec20be2ba62e7e45c38c466018283939abc016d332146",
++    "BL4ThirdPersonPOC/omni/air.py": "db15cc2fcea48ae456c6dbac9d131929cb79083022076940cd24e9075a5bba06",
++    "BL4ThirdPersonPOC/omni/animation.py": "9c2b723f8f7c3e385cc70c2bde2b8830838ae365d00806acdd599bebbfbbc006",
++    "BL4ThirdPersonPOC/omni/carry_throw_handoff.py": "165a9e7dca49cd128daea3f8081b6ba8f7c8b59d83afb474826db5575e85b689",
++    "BL4ThirdPersonPOC/omni/combat_handoff.py": "3d1256e3560916f51be97eb84460d1dcfb190cdbe71d5f1fe0e033dfe90161a2",
++    "BL4ThirdPersonPOC/omni/common.py": "2f39039b8cc9ef6621c7864d2a21e69a94f64b9804645190a4f6364f747e68cb",
++    "BL4ThirdPersonPOC/omni/diagnostics.py": "b4d7f044e476659b0b8896564c325e23db0b484b3f7ddb6b769db4e077e096c1",
++    "BL4ThirdPersonPOC/omni/free_look.py": "66ed4efecd417bc7b2987803dda9c45c35abcad28d98b04d022f5f3c0896fe5a",
++    "BL4ThirdPersonPOC/omni/grenade_facing.py": "d3b1854908d9cfdba485fa1b06c6b49b3fc2308ff4f88a0285f2d42fa65ca8fc",
++    "BL4ThirdPersonPOC/omni/ground.py": "6e0dd6865c8c7f8be18ed49325bc07f597dbfd81afc8ec26586010547a7f34aa",
++    "BL4ThirdPersonPOC/omni/hitch.py": "069524b4e785fc84598bca7dd56f78080389ade03e92ee56c93c98a45a38cc94",
++    "BL4ThirdPersonPOC/omni/inputs.py": "1ff0a341851819a8ac3151f3417ed4054e63c70a1b9f86b592a9f46538354064",
++    "BL4ThirdPersonPOC/omni/lifecycle.py": "08a7ad09aeb37b7c3bf2375b2bc35ad264322ab348fc736dc6764265fb2d1b2c",
++    "BL4ThirdPersonPOC/omni/native_air_input.py": "dd7650d043d05033cca748fee04bb223000e21b8af9821a8acd8b85535582d05",
++    "BL4ThirdPersonPOC/omni/native_fire_activity.py": "9b54d23f61d5c694691844bed4b0a71c1fc983131049a7d0fdb78e8856e68128",
++    "BL4ThirdPersonPOC/omni/native_free_look.py": "c24419bc64ab6733cdf20ffa5a84d49d49a0036fdfdfe8e23dfddfc8d704c62d",
++    "BL4ThirdPersonPOC/omni/native_idle_scope.py": "b0da506b2a0c519f3b25a4bbaadb5dda26cc180e67edf53f652edcf09c00318e",
++    "BL4ThirdPersonPOC/omni/native_movement.py": "5f92f0b7593ef54ce1ab2d687b1752e547fee1435ca069bf3a16dd07cfb04b7e",
++    "BL4ThirdPersonPOC/omni/native_rotation.py": "fab17acfd596610e5a4375c30b96a0576a66e98d94064d74801099b52a35eff7",
++    "BL4ThirdPersonPOC/omni/profiler.py": "5024bf9f8bb9e56eca12ba367e7610122cc71a13da410da2b8e120a97e1656df",
++    "BL4ThirdPersonPOC/omni/rebind_cache.py": "26a131f8f94ec3a375be0c4ffe8e263dc388041256bcb431011bd450367be883",
++    "BL4ThirdPersonPOC/omni/sampling.py": "0560eb1e671a0d09a95cba44960c5dc8067e58cfa927ad049208dd6fa7c09e91",
++    "BL4ThirdPersonPOC/omni/session.py": "8f3883715221157f1918a1e3f2fd4db70845ee6430cb25d913eb9c729a5dc6b0",
++    "BL4ThirdPersonPOC/omni/settings.py": "483d6ce8d50dc5e68a3322473237cc2222a291ef8392f5dc02d3baa7b00ff9fb",
++    "BL4ThirdPersonPOC/omni/slam.py": "d08f031d646d97a613b8ccc18cd79426ceffa7e399a03199c67e25f822f804c1",
++    "BL4ThirdPersonPOC/omni/slide.py": "650f03d7baf24929b86c0ced6a00d3f7948d09764ebccbfba108591c954e2061",
++    "BL4ThirdPersonPOC/omni/summon_seat.py": "16f9dde1acddca2386c40824675031c5e177db28f91443926f4b8885579302f6",
++    "BL4ThirdPersonPOC/omni/throw_handoff.py": "d6ead55597d7ee5d44f59cf364de88fd6e59b9f22f07fd65ec6310187a62becc",
++    "BL4ThirdPersonPOC/omni/vehicle_exit.py": "1eebf839c4e069cbe30bc36b3f6afb008937414f6784b637eef8236a8f8803f1",
++    "BL4ThirdPersonPOC/omni/vehicle_handoff.py": "47b5a3aaf85294314bd979d6705c83b18a44036c617706789bab1bcf365c832e",
++    "BL4ThirdPersonPOC/omni/vehicle_summon.py": "c6db2566c86d68e08e5c2f51f19df6199c5ff634ac347c57bb532cded7236c61",
++    "BL4ThirdPersonPOC/omni/visual_guard.py": "f0e99b39c73da8c4f141a1bfc39b1f58ef3022645fda8bdd891bfc2f0c50d692",
++    "BL4ThirdPersonPOC/omni/weapon_fire_diagnostics.py": "025fdf210a057814a7e17bbdba97e2b133b8abebd9fdf9ddb07793a00491bd18",
++    "BL4ThirdPersonPOC/pickup_registry.py": "e29f29beba9bb712a3e48007cce141258d20ca7aa513139593fd992770f2b9ec",
++    "BL4ThirdPersonPOC/placeable_targeting.py": "7cc79901f8ac94d585918229ac73fdb572e1463b06018a6b03c6533f3e1a9c48",
++    "BL4ThirdPersonPOC/pyproject.toml": "fe2ca7eda1b940db17bfc35ac182f1afcf6c16a564c635e4271923b55d9d4afb",
++    "BL4ThirdPersonPOC/respawn_camera.py": "8544d0ac4434cea437ff4289555cc5157be5bd1809f2a3c128b7947b81395ecf",
++    "BL4ThirdPersonPOC/runtime_updates.py": "316a4f1c0a24ff59e6d7393836dc1fdab25428edf9c26d05ebd8b6146cdd7507",
++    "BL4ThirdPersonPOC/settings_validation.py": "83f354b67b13e6311d11eb2363f614cd1e96f88c0c487740ddebff271e12f801",
++    "BL4ThirdPersonPOC/shoulder_blend.py": "9a85ef4d94bc768f78a42f4441f5fcbc03ebfa8abf0dbea23f079459de3db962",
++    "BL4ThirdPersonPOC/tps_recovery.py": "19b08d1d691dbc6746dd91af80ba2aeb37a2efa822d6ecade036c4b8aa039604",
++    "BL4ThirdPersonPOC/ui_and_commands.py": "86ca2c8ab04af13be90c4eaef4f6548073b96bb3ef05f4f201392a605db6614d",
++    "BL4ThirdPersonPOC/vehicle_camera.py": "a90c331975c881858f9ce6fbd486c5cc130e7082d006ab04c15ae3946cb17316",
++    "BL4ThirdPersonPOC/vehicle_control.py": "ad4d091a90b7a6cc67383ae7a17db0e43452235a1ae2742e6a66715d264f3cff"
++  },
++  "native_source_sha256": {
++    "docs/omni/native_validation/free_look_prefix.s": "e6d34ab606ff1d9737814c3d4990f75e14d04e45c62b9ad1a8c0353ba9707c83",
++    "docs/omni/native_validation/free_look_fixture.s": "e2280982167c4d336299844f49768c6e719e1155b2414e8eac977249cfd184c7"
++  }
++}
+diff --git a/docs/SDK_COUNTS_0.3.9.33.json b/docs/SDK_COUNTS_0.3.9.33.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..2d4449040204e4aa27298d9f31d568cbdf35322a
+--- /dev/null
++++ b/docs/SDK_COUNTS_0.3.9.33.json
+@@ -0,0 +1,186 @@
++{
++  "stand": {
++    "32": {
++      "scenario": "stand",
++      "updates": 600,
++      "game_writes": 0,
++      "per_update": {
++        "get_runtime": 2.0,
++        "prop_get": 147.917,
++        "prop_set": 0.0,
++        "ufunc": 26.1,
++        "uobj_eq": 53.003,
++        "weak_new": 0.0,
++        "weak_deref": 44.757,
++        "addr": 4.72,
++        "path_name": 0.453,
++        "rpm": 4.583,
++        "virtual_query": 0.0,
++        "thread_check": 19.0
++      },
++      "mapping_scans": 2,
++      "bound_calls_per_update": 24.833333333333332,
++      "input_snapshots_per_update": 11.0
++    },
++    "33": {
++      "scenario": "stand",
++      "updates": 600,
++      "game_writes": 0,
++      "per_update": {
++        "get_runtime": 2.0,
++        "prop_get": 147.917,
++        "prop_set": 0.0,
++        "ufunc": 26.1,
++        "uobj_eq": 53.003,
++        "weak_new": 0.0,
++        "weak_deref": 44.757,
++        "addr": 4.72,
++        "path_name": 0.453,
++        "rpm": 4.583,
++        "virtual_query": 0.0,
++        "thread_check": 19.0
++      },
++      "mapping_scans": 2,
++      "bound_calls_per_update": 24.833333333333332,
++      "input_snapshots_per_update": 11.0
++    }
++  },
++  "crouch": {
++    "32": {
++      "scenario": "crouch",
++      "updates": 600,
++      "game_writes": 1,
++      "per_update": {
++        "get_runtime": 2.0,
++        "prop_get": 113.833,
++        "prop_set": 0.0,
++        "ufunc": 30.1,
++        "uobj_eq": 41.003,
++        "weak_new": 0.0,
++        "weak_deref": 34.673,
++        "addr": 3.553,
++        "path_name": 0.453,
++        "rpm": 6.333,
++        "virtual_query": 0.0,
++        "thread_check": 16.0
++      },
++      "mapping_scans": 2,
++      "bound_calls_per_update": 18.833333333333332,
++      "input_snapshots_per_update": 9.0
++    },
++    "33": {
++      "scenario": "crouch",
++      "updates": 600,
++      "game_writes": 1,
++      "per_update": {
++        "get_runtime": 2.0,
++        "prop_get": 113.833,
++        "prop_set": 0.0,
++        "ufunc": 30.1,
++        "uobj_eq": 41.003,
++        "weak_new": 0.0,
++        "weak_deref": 34.673,
++        "addr": 3.553,
++        "path_name": 0.453,
++        "rpm": 6.333,
++        "virtual_query": 0.0,
++        "thread_check": 16.0
++      },
++      "mapping_scans": 2,
++      "bound_calls_per_update": 18.833333333333332,
++      "input_snapshots_per_update": 9.0
++    }
++  },
++  "move": {
++    "32": {
++      "scenario": "move",
++      "updates": 600,
++      "game_writes": 3,
++      "per_update": {
++        "get_runtime": 2.0,
++        "prop_get": 167.917,
++        "prop_set": 0.0,
++        "ufunc": 27.1,
++        "uobj_eq": 59.003,
++        "weak_new": 0.0,
++        "weak_deref": 49.757,
++        "addr": 4.72,
++        "path_name": 0.453,
++        "rpm": 8.583,
++        "virtual_query": 0.0,
++        "thread_check": 20.0
++      },
++      "mapping_scans": 2,
++      "bound_calls_per_update": 26.833333333333332,
++      "input_snapshots_per_update": 11.0
++    },
++    "33": {
++      "scenario": "move",
++      "updates": 600,
++      "game_writes": 3,
++      "per_update": {
++        "get_runtime": 2.0,
++        "prop_get": 167.917,
++        "prop_set": 0.0,
++        "ufunc": 27.1,
++        "uobj_eq": 59.003,
++        "weak_new": 0.0,
++        "weak_deref": 49.757,
++        "addr": 4.72,
++        "path_name": 0.453,
++        "rpm": 8.583,
++        "virtual_query": 0.0,
++        "thread_check": 20.0
++      },
++      "mapping_scans": 2,
++      "bound_calls_per_update": 26.833333333333332,
++      "input_snapshots_per_update": 11.0
++    }
++  },
++  "turn": {
++    "32": {
++      "scenario": "turn",
++      "updates": 600,
++      "game_writes": 606,
++      "per_update": {
++        "get_runtime": 2.0,
++        "prop_get": 170.917,
++        "prop_set": 0.0,
++        "ufunc": 30.1,
++        "uobj_eq": 59.003,
++        "weak_new": 0.0,
++        "weak_deref": 49.757,
++        "addr": 4.72,
++        "path_name": 0.453,
++        "rpm": 8.583,
++        "virtual_query": 0.0,
++        "thread_check": 21.0
++      },
++      "mapping_scans": 2,
++      "bound_calls_per_update": 26.833333333333332,
++      "input_snapshots_per_update": 11.0
++    },
++    "33": {
++      "scenario": "turn",
++      "updates": 600,
++      "game_writes": 606,
++      "per_update": {
++        "get_runtime": 2.0,
++        "prop_get": 170.917,
++        "prop_set": 0.0,
++        "ufunc": 30.1,
++        "uobj_eq": 59.003,
++        "weak_new": 0.0,
++        "weak_deref": 49.757,
++        "addr": 4.72,
++        "path_name": 0.453,
++        "rpm": 8.583,
++        "virtual_query": 0.0,
++        "thread_check": 21.0
++      },
++      "mapping_scans": 2,
++      "bound_calls_per_update": 26.833333333333332,
++      "input_snapshots_per_update": 11.0
++    }
++  }
++}
+diff --git a/docs/TESTPLAN_0.3.9.33_OMNI_FREE_LOOK_QA.md b/docs/TESTPLAN_0.3.9.33_OMNI_FREE_LOOK_QA.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..e3216eee6878c211f99b2078676df7cd5686abb2
+--- /dev/null
++++ b/docs/TESTPLAN_0.3.9.33_OMNI_FREE_LOOK_QA.md
+@@ -0,0 +1,27 @@
++# 0.3.9.33 – kurzer Spieltest
++
++Spiel beenden, alte Mod-Version und deren PyCache entfernen. Nur den Ordner
++`BL4ThirdPersonPOC/` oder `dist/BL4ThirdPersonPOC.sdkmod` installieren.
++
++1. Omni einschalten, kurz bewegen und anschließend stillstehen. Ohne Zielen
++   oder Schießen die Kamera hinter der Figur leicht hoch und runter drehen:
++   Die gewohnte Körperneigung soll erhalten bleiben.
++2. Kamera hinter der Figur langsam nach links/rechts drehen. Der Oberkörper
++   soll begrenzt mitdrehen. Zur Seite hin sollen Drehung und Neigung weich
++   verschwinden; von vorne soll Hoch-/Runterdrehen der Kamera keine entsprechende
++   Aim-Neigung auslösen. Auch den Übergang hinter der Figur bei ±180° Welt-Yaw testen.
++3. Wiederholen, während die Figur langsam läuft und anschließend geduckt steht
++   bzw. läuft. Richtung der Oberkörperdrehung und mögliche Zuckungen beachten.
++4. Kamera vorn/seitlich: TPS-ADS und Schießen beginnen, dann loslassen. Die
++   normale Kampf-Aim-Pose muss sofort frei sein; danach freies Omni-Umschauen.
++   Auch Hybrid-ADS (Hold/Toggle plus Sprint-Scope-Taste) und TPS↔FPS prüfen.
++5. Kurz Dash, Slide, Sprung/Luftbewegung, Werfen und Fahrzeug-Ein-/Ausstieg testen.
++   Danach normales freies Umschauen. Omni ausschalten: normales TPS soll wieder
++   seine eigene Oberkörper-/Ganzkörperdrehung verwenden.
++
++Für den ersten Befund reicht: Dreht der Oberkörper in die richtige Richtung?
++Ist der Umfang angenehm? Ist die Neigung von vorne weg, und sind die Übergänge
++weich? Die 35° sind die Aim-Eingabegrenze, kein gemessener Spine-Winkel.
++Keine Diagnoseaufnahme nötig, solange das Verhalten stimmt. FPS bei Gelegenheit
++am bisherigen Vergleichsort beobachten; SDK-Abfragezahlen allein beweisen
++keine unveränderten Spiel-FPS.
+diff --git a/docs/TEST_OUTPUT_0.3.9.33.txt b/docs/TEST_OUTPUT_0.3.9.33.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..699816484d67e4bed9942853f8b136e6076dbaa5
+--- /dev/null
++++ b/docs/TEST_OUTPUT_0.3.9.33.txt
+@@ -0,0 +1,5 @@
++......................................s..s....................ss.....................................................................................................................................................................................................................................................................................................................................................................................................................................................................
++----------------------------------------------------------------------
++Ran 517 tests in 6.090s
++
++OK (skipped=4)
+diff --git a/docs/VALIDATION_0.3.9.33_OMNI_FREE_LOOK_QA.md b/docs/VALIDATION_0.3.9.33_OMNI_FREE_LOOK_QA.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..2fce4500d19876afec684c252401b692e1d13f21
+--- /dev/null
++++ b/docs/VALIDATION_0.3.9.33_OMNI_FREE_LOOK_QA.md
+@@ -0,0 +1,41 @@
++# 0.3.9.33 – lokale Validierung
++
++517 Tests: 513 erfolgreich, vier übersprungen wegen fehlender optionaler
++Keystone-/Capstone-Pakete. Befehl:
++`python3 -m unittest discover -s tests -p 'test_*.py'`.
++Die GNU-/x64-Tests der neuen Fassung wurden ausgeführt, nicht übersprungen.
++Vollständige Ausgabe: `TEST_OUTPUT_0.3.9.33.txt`.
++
++24 neue Tests prüfen unter anderem den stetigen, symmetrischen Winkelübergang,
++±180°-Wrapping, Nicht-finite-Werte, aktuelle Post-Setter-Body-Richtung, Verhalten
++bei Kampf/Idle/Crouch/Handoff/Dash, geschlossene Gates, den tatsächlichen
++Frame-/Handoff-Pfad, geerbte Owner-Prüfung und Restore.
++
++Native Präfixquelle mit GNU assembler neu gebaut und bytegleich zur verwendeten
++Vorlage geprüft; kein Keystone/Capstone zur Laufzeit erforderlich. Die wirklichen
++Präfixbytes werden über eine Linux-x64-ABI-Testfixture ausgeführt:
++
++- Standing/Crouch-Nodes getrennt, passender und fremder Receiver/Caller;
++- Mode 0/1/2, unbekannter Modus und Null-Vektor;
++- Yaw-Limit und Pitch-Faktor über 361 Winkelwerte;
++- korrupte Pakete und ungültiger ursprünglicher Pitch ohne Schreibzugriff;
++- unveränderte XMM0–2, GPRs, Stack, Flags und MXCSR, Roll und Puffergrenzen;
++- 2.000 parallele Aufrufe, atomare Zähler und kohärente Paketpaare;
++- lebenslang gepinnter Crouch-Control und ausgerichtetes Publikationswort.
++
++`SDK_COUNTS_0.3.9.33.json` vergleicht die .32 und .33 in je 600 Updates für
++Stehen, Ducken, Laufen und Drehen. Alle erfassten SDK-/Owner-/Read-Zahlen und
++Spiel-Schreibzahlen sind identisch. Die neue Python-Winkelberechnung und native
++Arithmetik sind zusätzliche Arbeit; aus den Zähltests folgt keine FPS-Garantie.
++
++110 Produktionsdateien: vier gegenüber .32 geändert (Loader, Metadaten,
++`omni/session.py`, `omni/ground.py`), zwei hinzugefügt (`free_look.py`,
++`native_free_look.py`). Die übrigen 104 Dateien sind bytegleich, insbesondere die
++.32-Fahrzeugkorrektur und die ursprünglichen geprüften Native-Klassen. Der
++bisherige V3-Audit-Test bleibt unverändert und besteht.
++
++Paketprüfung: ein Loader-konformer Root, CRC, Versionsangaben sowie exakte
++Quell-/Archiv-Übereinstimmung. Manifest: `PACKAGE_SHA256_0.3.9.33.json`.
++Linux/SDK-Ersatzobjekte ersetzen keinen Live-Spieltest auf Windows. Sichtbare
++Spine-Drehung, BlendSpace-Skalierung und Kamera-/Animationsübergänge müssen im
++Spiel bestätigt werden. Diese Fassung ist eine QA-Build.
+diff --git a/docs/omni/native_validation/free_look_fixture.s b/docs/omni/native_validation/free_look_fixture.s
+new file mode 100644
+index 0000000000000000000000000000000000000000..0227316b615fa2a828092295a06826f42b712b58
+--- /dev/null
++++ b/docs/omni/native_validation/free_look_fixture.s
+@@ -0,0 +1,35 @@
++.intel_syntax noprefix
++.text
++.global run_free_look
++.type run_free_look,@function
++# SysV wrapper for the Windows-register inline prefix, with exact caller label.
++# rdi=stub, rsi=node, rdx=caller vector, rcx=128-byte state buffer.
++run_free_look:
++ mov r8, rcx
++ mov rcx, rsi
++ movdqu xmm0, [r8]
++ movdqu xmm1, [r8+16]
++ movdqu xmm2, [r8+32]
++ movabs rax, 0x1234567812345678
++ movabs r10, 0x8765432187654321
++ mov [r8+88], rsp
++ stmxcsr [r8+112]
++ stc
++ pushfq
++ pop qword ptr [r8+96]
++ call rdi
++.global free_look_return
++free_look_return:
++ mov [r8+48], rax
++ mov [r8+56], r10
++ mov [r8+64], rcx
++ mov [r8+72], rdx
++ mov [r8+80], rsp
++ pushfq
++ pop qword ptr [r8+104]
++ stmxcsr [r8+116]
++ movdqu [r8], xmm0
++ movdqu [r8+16], xmm1
++ movdqu [r8+32], xmm2
++ ret
++.section .note.GNU-stack,"",@progbits
+diff --git a/docs/omni/native_validation/free_look_prefix.s b/docs/omni/native_validation/free_look_prefix.s
+new file mode 100644
+index 0000000000000000000000000000000000000000..03e5b194d0702339978bae3ba88ae808fa2e85e0
+--- /dev/null
++++ b/docs/omni/native_validation/free_look_prefix.s
+@@ -0,0 +1,86 @@
++.intel_syntax noprefix
++.text
++# Inline prefix at the already reviewed AimOffset entry. No calls, new RVA,
++# UObject dereferences or worker-thread Python. RDX is the caller-owned vector.
++# control: mode, exact node, exact caller, overrides, dispatches, packed ff.
++# mode 1 retains .32's yaw-only neutralisation; mode 2 uses packed yaw/alpha.
++pushfq
++push rax
++push r10
++movabs r10, 0x1111111111111111
++cmp rcx, [r10+8]
++jne done
++mov rax, [rsp+24]
++cmp rax, [r10+16]
++jne done
++test rdx, rdx
++je done
++lock inc qword ptr [r10+32]
++cmp qword ptr [r10], 1
++je legacy
++cmp qword ptr [r10], 2
++jne done
++sub rsp, 64
++movdqu [rsp], xmm0
++movdqu [rsp+16], xmm1
++movdqu [rsp+32], xmm2
++stmxcsr [rsp+48]
++mov eax, [rsp+48]
++or eax, 0x1f80
++mov [rsp+52], eax
++ldmxcsr [rsp+52]
++# One aligned 64-bit load: yaw and alpha cannot come from different updates.
++mov rax, [r10+40]
++movd xmm0, eax
++cvtss2sd xmm0, xmm0
++shr rax, 32
++movd xmm1, eax
++cvtss2sd xmm1, xmm1
++# Reject corrupted publications and invalid original pitch without writing.
++ucomisd xmm0, xmm0
++jp restore
++ucomisd xmm0, [rip+max_yaw]
++ja restore
++ucomisd xmm0, [rip+min_yaw]
++jb restore
++ucomisd xmm1, xmm1
++jp restore
++ucomisd xmm1, [rip+one]
++ja restore
++ucomisd xmm1, [rip+zero]
++jb restore
++movsd xmm2, [rdx+8]
++ucomisd xmm2, xmm2
++jp restore
++ucomisd xmm2, [rip+max_pitch]
++ja restore
++ucomisd xmm2, [rip+min_pitch]
++jb restore
++mulsd xmm2, xmm1
++movsd [rdx], xmm0
++movsd [rdx+8], xmm2
++lock inc qword ptr [r10+24]
++restore:
++ldmxcsr [rsp+48]
++movdqu xmm0, [rsp]
++movdqu xmm1, [rsp+16]
++movdqu xmm2, [rsp+32]
++add rsp, 64
++jmp done
++legacy:
++mov qword ptr [rdx], 0
++lock inc qword ptr [r10+24]
++done:
++pop r10
++pop rax
++popfq
++jmp end
++# RIP-relative constants belong to each prefix copy, not game memory.
++max_yaw: .double 35.0
++min_yaw: .double -35.0
++one: .double 1.0
++zero: .double 0.0
++max_pitch: .double 180.0
++min_pitch: .double -180.0
++end:
++.section .note.GNU-stack,"",@progbits
+diff --git a/tests/omni_profiler_loader_scenario.py b/tests/omni_profiler_loader_scenario.py
+index 5275a3d69f835d6a99297e79380f37ab3d8cfe71..7671245119ce7a708d7c9eab5a9fa459fa3cc900 100644
+--- a/tests/omni_profiler_loader_scenario.py
++++ b/tests/omni_profiler_loader_scenario.py
+@@ -12,6 +12,7 @@ def run():
+     from BL4ThirdPersonPOC.omni.session import GameplaySession
+     from BL4ThirdPersonPOC.omni.common import KEY
+     from BL4ThirdPersonPOC.omni.sampling import SamplingMixin
++    from BL4ThirdPersonPOC.omni.native_free_look import NativeFreeLookAim
+ 
+     movement = S()
+     pawn = S(OakCharacterMovement=movement, IsCharacterDashing=lambda: False)
+@@ -23,6 +24,8 @@ def run():
+     mod._third_person_enabled = mod._third_person_pushed = True
+     child = GameplaySession.__new__(GameplaySession)
+     child.mod = mod
++    child.aim_native = NativeFreeLookAim(child)
++    child.combat = {}
+     child.active, child.busy, child.lifecycle_managed = True, False, True
+     child.updates = S(is_game_thread=lambda: True)
+     child.refs = tuple(lambda obj=obj: obj for obj in (pc, pawn, camera, movement))
+diff --git a/tests/test_ads_refactor_0_3_9_23.py b/tests/test_ads_refactor_0_3_9_23.py
+index e97c38dd3baed7ff0a4dd1bcae3f6ca11da42762..e3bf2e2feb7c886a7de924ed9bf4b148e46c4889 100644
+--- a/tests/test_ads_refactor_0_3_9_23.py
++++ b/tests/test_ads_refactor_0_3_9_23.py
+@@ -337,7 +337,7 @@ class NativeOwnershipSourceTests(unittest.TestCase):
+         result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True)
+         self.assertEqual(result.returncode, 0, result.stderr)
+         output = json.loads(result.stdout)
+-        self.assertEqual(output["version"], "0.3.9.32")
++        self.assertEqual(output["version"], "0.3.9.33")
+         self.assertEqual(output["snapshot"]["entries"], 2)
+         self.assertEqual(output["snapshot"]["exits"], 2)
+         self.assertTrue(output["cleaned"])
+diff --git a/tests/test_free_look_0_3_9_33.py b/tests/test_free_look_0_3_9_33.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..66f41957addb76ddca444f0b2a6aa17e8fe79c13
+--- /dev/null
++++ b/tests/test_free_look_0_3_9_33.py
+@@ -0,0 +1,338 @@
++"""Angular policy, real publisher/frame, and executable x64 prefix verification."""
++import ctypes as C
++import hashlib
++import math
++import mmap
++from pathlib import Path
++import platform
++import shutil
++import struct
++import subprocess
++import tempfile
++from types import SimpleNamespace as S
++import unittest
++from concurrent.futures import ThreadPoolExecutor
++import support
++from BL4ThirdPersonPOC.omni.free_look import pose_input, publish
++from BL4ThirdPersonPOC.omni.native_free_look import (
++    NativeFreeLookAim, FREE_LOOK_PREFIX, FREE_LOOK_HASH)
++from BL4ThirdPersonPOC.omni.session import GameplaySession
++
++ROOT = Path(__file__).resolve().parents[1]
++
++
++def packed(yaw, alpha):
++    return struct.unpack('<Q', struct.pack('<ff', yaw, alpha))[0]
++
++
++def publisher_session():
++    session = S(mod=S(_third_person_enabled=True), active=True, free_look_context=True, impulse_index=1,
++                cycle_start=None, ground_circle_previous_dash=False,
++                frames=10, combat=dict(active=False), collect_pose_diagnostics=False)
++    session.aim_native = NativeFreeLookAim(session)
++    session.aim_native.control[0] = session.aim_native.crouch_control[0] = 1
++    sample = dict(update_index=10, normal_tps_sample=True, combat=dict(active=False),
++                  actor_rotation=dict(Yaw=0), camera_rotation=dict(Yaw=75))
++    session.report = dict(samples=[sample], errors=[])
++    return session, sample
++
++
++class PosePolicyTests(unittest.TestCase):
++    def test_rear_sector_keeps_pitch_and_limits_yaw(self):
++        for value in (-60, -45, -35, -10, 0, 10, 35, 45, 60):
++            yaw, alpha = pose_input(value, 0)
++            self.assertEqual(alpha, 1)
++            self.assertEqual(yaw, max(-35, min(35, value)))
++
++    def test_side_and_front_are_neutral(self):
++        for value in (-180, -150, -90, 90, 150, 180, 270):
++            self.assertEqual(pose_input(value, 0), (0, 0))
++
++    def test_fade_is_symmetric_monotonic_and_continuous(self):
++        previous = 1
++        for i in range(601, 901):
++            value = i / 10
++            yaw, alpha = pose_input(value, 0)
++            neg_yaw, neg_alpha = pose_input(-value, 0)
++            self.assertAlmostEqual(neg_yaw, -yaw, places=12)
++            self.assertAlmostEqual(neg_alpha, alpha, places=13)
++            self.assertLessEqual(alpha, previous)
++            self.assertLessEqual(abs(yaw), 35)
++            previous = alpha
++        self.assertEqual(pose_input(75, 0), (17.5, .5))
++        for boundary in (35, 60, 90):
++            a = pose_input(boundary - 1e-5, 0)
++            b = pose_input(boundary + 1e-5, 0)
++            self.assertLess(max(abs(x-y) for x,y in zip(a,b)), 1e-4)
++
++    def test_body_relative_and_wrap_do_not_depend_on_world_heading(self):
++        self.assertEqual(pose_input(179, -179), (-2, 1))
++        self.assertEqual(pose_input(-179, 179), (2, 1))
++        self.assertEqual(pose_input(720 + 75, 720), (17.5, .5))
++
++    def test_invalid_inputs_fail_before_publication(self):
++        for value in (math.nan, math.inf, -math.inf):
++            with self.assertRaisesRegex(RuntimeError, 'nonfinite'):
++                pose_input(value, 0)
++            with self.assertRaisesRegex(RuntimeError, 'nonfinite'):
++                pose_input(0, value)
++
++
++class PublisherTests(unittest.TestCase):
++    def test_publishes_one_packed_word_and_does_not_access_sdk(self):
++        session, sample = publisher_session()
++        session.bound = lambda: self.fail('extra SDK access')
++        publish(session)
++        for control in (session.aim_native.control, session.aim_native.crouch_control):
++            self.assertEqual(control[0], 2)
++            self.assertEqual(control[5], packed(17.5, .5))
++        self.assertNotIn('free_look', sample)
++
++    def test_uses_actual_post_follow_body_for_standing_and_crouch(self):
++        for field, key in (('follow', 'immediate_actor_rotation'),
++                           ('crouch_follow', 'actor_after')):
++            session, sample = publisher_session()
++            sample[field] = {key: dict(Yaw=70)}
++            publish(session)
++            self.assertEqual(session.aim_native.control[5], packed(5, 1))
++
++    def test_diagnostics_only_adds_current_sample_pose(self):
++        session, sample = publisher_session()
++        session.collect_pose_diagnostics = True
++        publish(session)
++        self.assertEqual(sample['free_look']['yaw_input'], 17.5)
++        self.assertEqual(sample['free_look']['pitch_alpha'], .5)
++
++    def test_closed_gates_are_not_reopened(self):
++        session, _ = publisher_session()
++        session.aim_native.crouch_control[0] = 0
++        publish(session)
++        self.assertEqual(session.aim_native.control[0], 2)
++        self.assertEqual(session.aim_native.crouch_control[0], 0)
++        self.assertEqual(session.aim_native.crouch_control[5], 0)
++
++    def test_rejected_contexts_keep_legacy_special_mode_and_closed_gate(self):
++        for reason in ('inactive', 'context', 'impulse', 'dash', 'cycle',
++                       'sample_combat', 'combat', 'abnormal', 'stale', 'no_sample'):
++            session, sample = publisher_session()
++            session.aim_native.control[0] = 2
++            session.aim_native.crouch_control[0] = 0
++            if reason == 'inactive': session.active = False
++            elif reason == 'context': session.free_look_context = False
++            elif reason == 'impulse': session.impulse_index = None
++            elif reason == 'dash': session.ground_circle_previous_dash = True
++            elif reason == 'cycle': session.cycle_start = 3
++            elif reason == 'sample_combat': sample['combat']['active'] = True
++            elif reason == 'combat': session.combat['active'] = True
++            elif reason == 'abnormal': sample['normal_tps_sample'] = False
++            elif reason == 'stale': sample['update_index'] = 9
++            elif reason == 'no_sample': session.report['samples'] = []
++            publish(session)
++            expected = 0 if reason in ('inactive', 'combat', 'sample_combat') else 1
++            self.assertEqual(session.aim_native.control[0], expected, reason)
++            self.assertEqual(session.aim_native.crouch_control[0], 0, reason)
++            self.assertEqual(session.aim_native.control[5], 0, reason)
++
++    def test_nonfinite_disarms_both_gates(self):
++        session, sample = publisher_session()
++        sample['camera_rotation']['Yaw'] = math.nan
++        with self.assertRaisesRegex(RuntimeError, 'nonfinite'):
++            publish(session)
++        self.assertEqual(session.aim_native.control[0], 0)
++        self.assertEqual(session.aim_native.crouch_control[0], 0)
++
++    def test_stop_restores_owned_hook_and_closes_both_controls(self):
++        session, _ = publisher_session()
++        aim = session.aim_native
++        operations = []
++        session.updates = S(is_game_thread=lambda: True)
++        session.mod._native_restore_hook = lambda hook: operations.append('restore')
++        session.mod._native_release_hook = lambda hook: operations.append('release')
++        aim.control[0] = aim.crouch_control[0] = 2
++        aim.hook = dict(patch_attempted=True, control=aim.control)
++        aim.stop()
++        self.assertEqual(operations, ['restore', 'release'])
++        self.assertIsNone(aim.hook)
++        self.assertEqual((aim.control[0], aim.crouch_control[0]), (0,0))
++        self.assertTrue(session.report['aim_native_restoration_verified'])
++
++    def test_foreign_animation_is_rejected_by_inherited_owner_validation(self):
++        session, _ = publisher_session()
++        session.anim_ref = lambda: S(_get_address=lambda: 0x5000)
++        session.anim_address = 0x4000
++        with self.assertRaisesRegex(RuntimeError, 'identity changed'):
++            session.aim_native.validate()
++
++    def test_real_frame_publishes_after_body_work_and_closes_input_scope(self):
++        state, sample = publisher_session()
++        session = GameplaySession.__new__(GameplaySession)
++        session.__dict__.update(state.__dict__)
++        session.busy = session.lifecycle_managed = False
++        session.updates = S(is_game_thread=lambda: True)
++        pawn = S(IsCharacterDashing=lambda: False)
++        session.bound = lambda: (None, pawn, None, None)
++        scope = []
++        session.inputs = S(begin_frame=lambda **kw: scope.append('begin'),
++                           end_frame=lambda: scope.append('end'))
++        session.disarm_ground_vector = lambda: None
++        session.ground_clip_originals = []
++        def body(*args):
++            session.free_look_context = True
++            sample['follow'] = dict(immediate_actor_rotation=dict(Yaw=70))
++        session._ground_pose_frame = body
++        session.frame(None, None, None, None)
++        self.assertEqual(session.aim_native.control[5], packed(5, 1))
++        self.assertEqual(scope, ['begin', 'end'])
++        self.assertFalse(session._callback_scope)
++
++    def test_real_handoff_only_allows_run_or_non_dash_crouch(self):
++        for action, reason, dash, expected in (
++            ('RUN', None, False, True), ('PAUSE', 'CROUCHED', False, True),
++            ('PAUSE', 'CROUCHED', True, False), ('PAUSE', 'AIRBORNE', False, False),
++            ('PAUSE', 'SLIDE', False, False), ('PAUSE', 'SLIDE_EXIT', False, False),
++            ('PAUSE', 'JUMP_INPUT', False, False), ('STOP', 'TPS_OR_UI_CHANGED', False, False)):
++            session = GameplaySession.__new__(GameplaySession)
++            session.active, session.busy = True, False
++            session.updates = S(is_game_thread=lambda: True)
++            session.bound = lambda: (None, None, None, None)
++            session.classify_handoff = lambda *args: (action, reason)
++            session.is_dashing = lambda pawn: dash
++            session.finish = lambda *args: None
++            session.paused_frame = session._dash_vector_frame = lambda *args: None
++            session.handoff_reason = None
++            session.report = dict(samples=[], errors=[])
++            session._handoff_frame(None, None, None, None)
++            self.assertEqual(session.free_look_context, expected, reason)
++
++
++@unittest.skipUnless(platform.system() == 'Linux' and platform.machine() == 'x86_64'
++                     and shutil.which('gcc') and shutil.which('objcopy'),
++                     'executable native validation requires Linux x64 GNU tools')
++class ExecutablePrefixTests(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        cls.directory = tempfile.TemporaryDirectory()
++        directory = Path(cls.directory.name)
++        sources = ROOT / 'docs/omni/native_validation'
++        subprocess.run(['gcc', '-shared', '-fPIC', str(sources/'free_look_fixture.s'),
++                        '-o', str(directory/'fixture.so')], check=True, capture_output=True)
++        cls.lib = C.CDLL(str(directory/'fixture.so'))
++        cls.lib.run_free_look.argtypes = [C.c_void_p] * 4
++        cls.lib.run_free_look.restype = None
++        cls.caller = C.cast(cls.lib.free_look_return, C.c_void_p).value
++        subprocess.run(['gcc', '-c', str(sources/'free_look_prefix.s'),
++                        '-o', str(directory/'prefix.o')], check=True, capture_output=True)
++        subprocess.run(['objcopy', '-O', 'binary', '--only-section=.text',
++                        str(directory/'prefix.o'), str(directory/'prefix.bin')], check=True)
++        cls.assembled = (directory/'prefix.bin').read_bytes()
++
++    @classmethod
++    def tearDownClass(cls):
++        cls.directory.cleanup()
++
++    def setUp(self):
++        self.aim = NativeFreeLookAim(S(mod=S()))
++        for i, control in enumerate((self.aim.control, self.aim.crouch_control)):
++            control[0], control[1], control[2] = 2, 0x10000 + i*16, self.caller
++            control[5] = packed(17.5, .5)
++        self.memory = mmap.mmap(-1, 4096, prot=mmap.PROT_READ|mmap.PROT_WRITE|mmap.PROT_EXEC)
++        self.memory.write(self.aim.prefix_code() + b'\xc3')
++        self.address = C.addressof(C.c_ubyte.from_buffer(self.memory))
++
++    def tearDown(self):
++        self.memory.close()
++
++    def run_prefix(self, node=0x10000, pitch=40, null=False):
++        vector = (C.c_double * 5)(1234, 140, pitch, 23, 4321)
++        state = (C.c_ubyte * 128)()
++        seed = bytes(range(48))
++        C.memmove(state, seed, len(seed))
++        address = C.addressof(vector)+8
++        self.lib.run_free_look(self.address, node, None if null else address, C.addressof(state))
++        raw = bytes(state)
++        self.assertEqual(raw[:48], seed, 'XMM0-2 changed')
++        self.assertEqual(struct.unpack_from('<Q',raw,48)[0], 0x1234567812345678)
++        self.assertEqual(struct.unpack_from('<Q',raw,56)[0], 0x8765432187654321)
++        self.assertEqual(struct.unpack_from('<Q',raw,64)[0], node)
++        self.assertEqual(struct.unpack_from('<Q',raw,72)[0], 0 if null else address)
++        self.assertEqual(raw[80:88], raw[88:96], 'stack changed')
++        self.assertEqual(raw[96:104], raw[104:112], 'flags changed')
++        self.assertEqual(raw[112:116], raw[116:120], 'MXCSR changed')
++        self.assertEqual((vector[0], vector[3], vector[4]), (1234,23,4321))
++        return tuple(vector)[1:3]
++
++    def test_source_template_hash_and_publication_alignment(self):
++        self.assertEqual(self.assembled, FREE_LOOK_PREFIX)
++        self.assertEqual(hashlib.sha256(FREE_LOOK_PREFIX).hexdigest(), FREE_LOOK_HASH)
++        self.assertEqual(hashlib.sha256(self.aim.PREFIX).hexdigest(), self.aim.HASH)
++        self.assertEqual(len(self.aim.PREFIX), self.aim.PREFIX_SIZE)
++        for control in (self.aim.control, self.aim.crouch_control):
++            self.assertEqual((C.addressof(control)+40)%8, 0)
++        self.assertIs(self.aim.control._slide_crouch_control, self.aim.crouch_control)
++
++    def test_standing_and_crouch_only_touch_the_matching_node(self):
++        self.assertEqual(self.run_prefix(), (17.5,20))
++        self.assertEqual((self.aim.control[3],self.aim.crouch_control[3]), (1,0))
++        self.aim.crouch_control[5] = packed(-35,1)
++        self.assertEqual(self.run_prefix(node=0x10010,pitch=-50), (-35,-50))
++        self.assertEqual((self.aim.control[3],self.aim.crouch_control[3]), (1,1))
++
++    def test_legacy_zero_yaw_preserves_pitch_exactly(self):
++        for control in (self.aim.control,self.aim.crouch_control): control[0] = 1
++        for node in (0x10000,0x10010):
++            self.assertEqual(self.run_prefix(node,pitch=-40), (0,-40))
++
++    def test_disabled_unknown_mode_foreign_node_caller_and_null_leave_vector(self):
++        for mode in (0,3):
++            self.aim.control[0] = mode
++            self.assertEqual(self.run_prefix(), (140,40))
++        self.aim.control[0] = 2
++        self.assertEqual(self.run_prefix(node=0x20000), (140,40))
++        self.assertEqual(self.run_prefix(null=True), (140,40))
++        self.aim.control[2] += 1
++        self.assertEqual(self.run_prefix(), (140,40))
++        self.assertEqual(self.aim.control[3],0)
++
++    def test_front_view_neutralizes_both_axes_and_keeps_other_state(self):
++        for camera in (90,120,180,270):
++            self.aim.control[5] = packed(*pose_input(camera,0))
++            self.assertEqual(self.run_prefix(pitch=-60), (0,0))
++
++    def test_corrupt_packet_never_writes(self):
++        for yaw, alpha in ((math.nan,1),(math.inf,1),(-math.inf,1),
++                           (36,1),(-36,1),(5,math.nan),(5,math.inf),(5,-.1),(5,1.1)):
++            self.aim.control[5] = packed(yaw,alpha)
++            self.assertEqual(self.run_prefix(),(140,40))
++        self.assertEqual(self.aim.control[3],0)
++
++    def test_invalid_original_pitch_never_writes(self):
++        for pitch in (math.nan,math.inf,-math.inf,181,-181):
++            result = self.run_prefix(pitch=pitch)
++            self.assertEqual(result[0],140)
++            self.assertTrue(math.isnan(result[1]) if math.isnan(pitch) else result[1] == pitch)
++        self.assertEqual(self.aim.control[3],0)
++
++    def test_native_angular_sweep_matches_publisher_policy(self):
++        for value in range(-180,181):
++            yaw, alpha = pose_input(value,0)
++            self.aim.control[5] = packed(yaw,alpha)
++            actual = self.run_prefix(pitch=52)
++            self.assertAlmostEqual(actual[0],yaw,places=5)
++            self.assertAlmostEqual(actual[1],52*alpha,places=5)
++
++    def test_parallel_dispatch_counters_and_packets_remain_coherent(self):
++        values = (packed(-20,.25), packed(35,.75))
++        def worker(index):
++            for _ in range(500):
++                if index == 0:
++                    self.aim.control[5] = values[_%2]
++                result = self.run_prefix()
++                self.assertIn(result, ((-20,10),(35,30),(17.5,20)))
++        with ThreadPoolExecutor(max_workers=4) as pool:
++            list(pool.map(worker,range(4)))
++        self.assertEqual(self.aim.control[3],2000)
++        self.assertEqual(self.aim.control[4],2000)
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/tests/test_omni_profiler_0_3_9_26.py b/tests/test_omni_profiler_0_3_9_26.py
+index abc100a6b4dc6636347325f42abab1a1387de1c9..37dc4eca32b3f445eb189ab5cf5166b1c27b5edc 100644
+--- a/tests/test_omni_profiler_0_3_9_26.py
++++ b/tests/test_omni_profiler_0_3_9_26.py
+@@ -18,7 +18,7 @@ class ProfilerTests(unittest.TestCase):
+     def setUp(self):
+         self.directory = TemporaryDirectory()
+         self.addCleanup(self.directory.cleanup)
+-        self.owner = S(MOD_VERSION='0.3.9.32', SETTINGS_DIR=self.directory.name,
++        self.owner = S(MOD_VERSION='0.3.9.33', SETTINGS_DIR=self.directory.name,
+                        logging=support.sdk.logging, _native_read=lambda address, size: bytes(size),
+                        _get_runtime=lambda: (None, None, None))
+         self.sample = dict(normal_tps_sample=True, movement_input_active=False, horizontal_speed=0.)
+@@ -196,7 +196,7 @@ class ProfilerTests(unittest.TestCase):
+         script = Path(__file__).with_name('omni_profiler_loader_scenario.py')
+         result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True)
+         self.assertEqual(result.returncode, 0, result.stderr)
+-        self.assertEqual(json.loads(result.stdout), dict(version='0.3.9.32', updates=600, restored=True))
++        self.assertEqual(json.loads(result.stdout), dict(version='0.3.9.33', updates=600, restored=True))
+ 
+ 
+ if __name__ == '__main__':

@@ -62,6 +62,13 @@ class SamplingMixin:
         """Native dash state of the bound pawn, read once per callback."""
         return self.callback_value('dashing', lambda: bool(pawn.IsCharacterDashing()))
 
+    def is_ground_slamming(self, pawn, movement):
+        # The measured pure getter distinguishes a Slam from an ordinary jump.
+        # Walking does not need another SDK call; no state survives a callback.
+        if int(movement.MovementMode) != 3 or int(movement.CustomMovementMode) != 0:
+            return False
+        return self.callback_value('ground_slam', lambda: bool(pawn.IsPerformingGroundSlam()))
+
     def camera_mode(self, pawn, camera):
         """Camera mode for stage decisions, read once per callback.
 

@@ -507,6 +507,8 @@ class GroundMixin:
                 raise RuntimeError('Transition outside owned game thread')
             pc, pawn, camera, movement = self.bound()
             action, reason = self.classify_handoff(pc, pawn, camera, movement)
+            self.free_look_context = (action == 'RUN' or
+                                      (reason == 'CROUCHED' and not self.is_dashing(pawn)))
             if action == 'STOP':
                 self.finish(reason)
                 return

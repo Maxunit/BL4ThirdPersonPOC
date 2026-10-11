@@ -22,8 +22,13 @@ def shutdown(*, owner_module) -> None:
     from . import npc_camera_visibility, placeable_targeting, npc_native_resume
     from . import ground_slam_camera, ffyl_strategy_runtime, pickup_registry, vehicle_camera, vehicle_control
     from . import omni, action_keys, native_aim_origin
+    from . import camera_height_capture, ground_slam_distance
 
     owner_module._respawn_camera_state = None
+
+    from . import root_height
+    root_height.reset(owner_module)
+    owner_module._camera_frame = None
 
     cleanup_failures: list[str] = []
 
@@ -44,6 +49,10 @@ def shutdown(*, owner_module) -> None:
     # Omnidirectional movement first: it reads the camera/state flags, owns
     # runtime_updates routes and native detours that must restore while the
     # bound pawn, mesh and camera are still the ones it captured.
+    height_restored = cleanup_stage(
+        "camera_height_capture", lambda: camera_height_capture.shutdown(owner_module),
+        require_success=True,
+    )
     omni_restored = cleanup_stage(
         "omni_movement",
         lambda: omni.shutdown(owner_module, "MOD_DISABLED"),
@@ -77,7 +86,11 @@ def shutdown(*, owner_module) -> None:
     vehicle_restored = cleanup_stage(
         'vehicle_camera', vehicle_camera.shutdown, require_success=True,
     )
-    slam_restored = cleanup_stage(
+    distance_restored = cleanup_stage(
+        'ground_slam_distance', lambda: ground_slam_distance.shutdown(owner_module),
+        require_success=True,
+    )
+    slam_restored = distance_restored and cleanup_stage(
         "ground_slam",
         lambda: ground_slam_camera.shutdown("lifecycle_shutdown"),
         require_success=True,
@@ -92,13 +105,13 @@ def shutdown(*, owner_module) -> None:
     if not ffyl_restored:
         owner_module._ffyl_beta_fault = True
     if not (slam_restored and ffyl_restored and vehicle_restored and control_restored
-            and omni_restored and keys_restored and aim_restored):
+            and omni_restored and keys_restored and aim_restored and height_restored and distance_restored):
         owner_module.logging.error(
             "[BL4ThirdPersonPOC] DISABLE_CAMERA_GROUP_RETAINED "
             f"ground_slam_restored={slam_restored} ffyl_restored={ffyl_restored} "
             f"vehicle_camera_restored={vehicle_restored} vehicle_control_restored={control_restored} "
             f"omni_movement_restored={omni_restored} action_keys_restored={keys_restored} "
-            f"aim_origin_restored={aim_restored}; "
+            f"aim_origin_restored={aim_restored} height_capture_restored={height_restored}; "
             "dependent camera/native owners retained; restart game"
         )
         return
