@@ -12,7 +12,7 @@ Native lifetime and handoff contracts are described in docs/NATIVE_LIFECYCLE.md.
 from __future__ import annotations
 
 # Available before build_mod invokes the automatic enable callback.
-MOD_VERSION = "0.3.9.39"
+MOD_VERSION = "0.3.9.40"
 HYBRID_ADS_AVAILABLE = True  # optional Hybrid diagnostics QA
 
 import builtins

@@ -39,3 +39,7 @@ The same facing script also accepts .39. In that QA an eligible Slam should
 show Turn/TurnReplace = 1/1 with IdleRoot/IdleUpdate/Aim/CrouchAim = 0/0/0/0.
 This records the final published state; it does not prove rendering order.
 The separate .38 rotation-request probe intentionally remains .38-only.
+
+The script also accepts .40: the existing Root guard is expected only during
+Exit/its owned return (Turn/TurnReplace/IdleRoot=1/1/1; other three gates=0).
+For detailed .40 Exit capture prefer `ground_slam_exit_capture.py`.

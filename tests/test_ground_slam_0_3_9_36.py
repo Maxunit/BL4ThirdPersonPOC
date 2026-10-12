@@ -272,7 +272,7 @@ class PoseAdmissionTests(unittest.TestCase):
         result=subprocess.run([sys.executable,str(Path(__file__).with_name('ground_slam_loader_scenario.py'))],
                               capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertEqual(json.loads(result.stdout),dict(version='0.3.9.39',far=[-105.,55.,10.],
+        self.assertEqual(json.loads(result.stdout),dict(version='0.3.9.40',far=[-105.,55.,10.],
                          near=[45.,55.,10.],scope_cleared=True,default=150.,shutdown=True))
 
     def test_real_frame_disables_stale_front_pose_in_air_and_exit_then_resumes(self):
@@ -286,7 +286,7 @@ class PoseAdmissionTests(unittest.TestCase):
         camera=S(GetActorCameraMode=lambda pawn:mode,CameraModeState=S(bIsTransitioning=False))
         session.native=S(control=[0]*10,hook={},base=0x140000000,validate=Mock())
         session.slam_heading_owned=False
-        session.idle_native=S(control=[0]*9);session.idle_update=S(control=[0]*9)
+        session.idle_native=S(control=[0]*9,hook={},validate=Mock());session.idle_update=S(control=[0]*9)
         session.jump_idle_owned=False;session.close_jump=Mock()
         session.bound=lambda:(S(bShowMouseCursor=False),pawn,camera,movement)
         session.inputs=S(begin_frame=lambda **kw:None,end_frame=lambda:None)

@@ -337,7 +337,7 @@ class NativeOwnershipSourceTests(unittest.TestCase):
         result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         output = json.loads(result.stdout)
-        self.assertEqual(output["version"], "0.3.9.39")
+        self.assertEqual(output["version"], "0.3.9.40")
         self.assertEqual(output["snapshot"]["entries"], 2)
         self.assertEqual(output["snapshot"]["exits"], 2)
         self.assertTrue(output["cleaned"])

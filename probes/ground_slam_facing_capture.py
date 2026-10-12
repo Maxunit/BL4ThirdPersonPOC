@@ -24,8 +24,8 @@ def toggle():
         old.finish('MANUAL_STOP')
         return
     mod = sys.modules.get('BL4ThirdPersonPOC')
-    if mod is None or getattr(mod, 'MOD_VERSION', None) not in ('0.3.9.38', '0.3.9.39'):
-        raise RuntimeError('Load BL4ThirdPersonPOC 0.3.9.38 or 0.3.9.39 first')
+    if mod is None or getattr(mod, 'MOD_VERSION', None) not in ('0.3.9.38', '0.3.9.39', '0.3.9.40'):
+        raise RuntimeError('Load BL4ThirdPersonPOC 0.3.9.38, .39 or .40 first')
     from BL4ThirdPersonPOC import camera_height_capture as height, runtime_updates
     from BL4ThirdPersonPOC.omni import profiler
     from BL4ThirdPersonPOC.omni.common import KEY as OMNI_KEY

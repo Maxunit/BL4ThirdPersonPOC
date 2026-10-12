@@ -1,25 +1,28 @@
-# BL4ThirdPersonPOC 0.3.9.39 Ground Slam Heading QA
+# BL4ThirdPersonPOC 0.3.9.40 Ground Slam Root Exit QA
 
-Für freies Omni hält diese QA die Körperrichtung während des Ground Slams,
-während die vollständige native Slam-Pose aus .38 erhalten bleiben soll.
-Die Nutzeraufzeichnung zeigt beim Richtungswechsel in der Luft eine Anforderung
-vom bekannten TurnState-Aufruf. Genau dessen Rotationsargument erhält im
-vorhandenen nativen Guard die aktuelle Komponentenrotation. Andere Aufrufe,
-Bewegungsdelta und sämtliche Aim-/Idle-Pose-Eingriffe werden dabei freigegeben.
+Die .39 hielt Actor und Mesh im Luft-Slam und beim Exit korrekt. Die neue
+Aufzeichnung zeigt den verbleibenden sichtbaren Konflikt in der animierten
+Root: Nach Rückkehr des IdleTurns-Pfads dreht sie stark gegen den gehaltenen
+Actor. Es ist kein erneuter Actor-/Mesh-Richtungswechsel.
 
-Der Hold gilt vom erkannten Luft-Slam durch GroundSlamExit und den eigenen
-TPS-Rückkehrblend. Vor normaler Omni-Wiederaufnahme wird seine Zuständigkeit
-beendet; es gibt keinen Actor-Setter und kein Zurückdrehen auf gespeicherten Yaw.
-Combat, ADS, UI und andere Sonderzustände erhalten keinen Slam-Hold. Sichtbare
-Richtung und vollständige Animation zusammen benötigen jetzt Nutzer-QA.
+.40 verwendet beim GroundSlamExit und seinem TPS-Rückkehrblend zusätzlich den
+bestehenden, lokal begrenzten IdleRoot-Guard. Dieser überspringt nur die extra
+Root-Quaternion-Multiplikation **nach** der ursprünglichen Pose-Auswertung.
+IdleUpdate, Aim und CrouchAim bleiben freigegeben. In der Luft bleibt auch diese
+Root-Korrektur nativ; der bestätigte TurnState-Heading-Hold aus .39 bleibt.
 
-Kein neuer nativer Patch, Hook, Producer, Timer oder zusätzlicher SDK-Getter im
-gewöhnlichen Omni-Pfad. Distanzfunktion (150 cm) und Root-Höhenkorrektur sind
-bytegleich zu .38.
+Vor normaler Omni-Wiederaufnahme werden beide eigenen Holds geschlossen.
+Combat/ADS/UI und andere Sonderzustände behalten Priorität. Kein neuer
+Maschinencode, Hook, Producer, Timer oder gewöhnlicher Omni-SDK-Getter.
+Distanzfunktion mit 150 cm und Root-Höhenkorrektur sind bytegleich zu .39.
 
-- [Spieltest](docs/TESTPLAN_0.3.9.39_GROUND_SLAM_HEADING_QA.md)
-- [Änderungen](docs/CHANGELOG_0.3.9.39_GROUND_SLAM_HEADING_QA.md)
-- [Validierung](docs/VALIDATION_0.3.9.39_GROUND_SLAM_HEADING_QA.md)
+Die animierte Root ist hier die Skelettrotation; die angenommene Root-Höhen-
+Kamerakorrektur aus .35 wird nicht verändert. Vollständige Slam-/Exit-Pose und
+sichtbare Ruhe zusammen müssen jetzt im Spiel bestätigt werden.
+
+- [Spieltest](docs/TESTPLAN_0.3.9.40_GROUND_SLAM_ROOT_EXIT_QA.md)
+- [Änderungen](docs/CHANGELOG_0.3.9.40_GROUND_SLAM_ROOT_EXIT_QA.md)
+- [Validierung](docs/VALIDATION_0.3.9.40_GROUND_SLAM_ROOT_EXIT_QA.md)
 
 ## Enthalten: Ground Slam Update aus .37
 
