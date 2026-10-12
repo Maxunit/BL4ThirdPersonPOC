@@ -1,21 +1,25 @@
-# BL4ThirdPersonPOC 0.3.9.38 Ground Slam Pose QA
+# BL4ThirdPersonPOC 0.3.9.39 Ground Slam Heading QA
 
-Für den Gegenrichtungsfall (Kamera Norden, Figur Süden) übernimmt das Spiel
-während des Slams gemeinsam Körperausrichtung, Aim- und Idle-Pose. .37 gab
-Aim bereits frei, hielt beim Exit aber die Körperrichtung und beide Idle-
-Eingriffe noch aktiv. Dieser gemischte Zustand wird jetzt entfernt.
+Für freies Omni hält diese QA die Körperrichtung während des Ground Slams,
+während die vollständige native Slam-Pose aus .38 erhalten bleiben soll.
+Die Nutzeraufzeichnung zeigt beim Richtungswechsel in der Luft eine Anforderung
+vom bekannten TurnState-Aufruf. Genau dessen Rotationsargument erhält im
+vorhandenen nativen Guard die aktuelle Komponentenrotation. Andere Aufrufe,
+Bewegungsdelta und sämtliche Aim-/Idle-Pose-Eingriffe werden dabei freigegeben.
 
-Der aktive Luft-Slam wird als nativer Sonderzustand behandelt; gewöhnliche
-Omni-Luftausrichtung läuft dort nicht. GroundSlamExit und der anschließende
-TPS-Kamera-Blend behalten die native Zuständigkeit. Nach ruhiger TPS-Rückkehr
-und dem vorhandenen Input-Release übernimmt wieder der normale Omni-Pfad.
-Das Spiel darf die Figur während des Slams nativ drehen; ihr aktueller Yaw
-ist danach der Ausgangspunkt für Omni. Kein erzwungenes Zurückdrehen auf
-eine gespeicherte Richtung. Sichtbares Ergebnis benötigt den Spieltest.
+Der Hold gilt vom erkannten Luft-Slam durch GroundSlamExit und den eigenen
+TPS-Rückkehrblend. Vor normaler Omni-Wiederaufnahme wird seine Zuständigkeit
+beendet; es gibt keinen Actor-Setter und kein Zurückdrehen auf gespeicherten Yaw.
+Combat, ADS, UI und andere Sonderzustände erhalten keinen Slam-Hold. Sichtbare
+Richtung und vollständige Animation zusammen benötigen jetzt Nutzer-QA.
 
-- [Spieltest](docs/TESTPLAN_0.3.9.38_GROUND_SLAM_POSE_QA.md)
-- [Änderungen](docs/CHANGELOG_0.3.9.38_GROUND_SLAM_POSE_QA.md)
-- [Validierung](docs/VALIDATION_0.3.9.38_GROUND_SLAM_POSE_QA.md)
+Kein neuer nativer Patch, Hook, Producer, Timer oder zusätzlicher SDK-Getter im
+gewöhnlichen Omni-Pfad. Distanzfunktion (150 cm) und Root-Höhenkorrektur sind
+bytegleich zu .38.
+
+- [Spieltest](docs/TESTPLAN_0.3.9.39_GROUND_SLAM_HEADING_QA.md)
+- [Änderungen](docs/CHANGELOG_0.3.9.39_GROUND_SLAM_HEADING_QA.md)
+- [Validierung](docs/VALIDATION_0.3.9.39_GROUND_SLAM_HEADING_QA.md)
 
 ## Enthalten: Ground Slam Update aus .37
 

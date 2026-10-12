@@ -11,13 +11,61 @@ class SlamMixin:
                     and bool(camera.CameraModeState.bIsTransitioning)))
 
     def release_native_slam_pose(self):
-        # One native owner for body facing and the complete pose. Merely
-        # releasing Aim while keeping Turn/Idle neutralisation mixes policies.
+        # Release every pose input before the Special pipeline. The separate
+        # final heading publication may hold only the audited TurnState caller.
         self.native.control[0] = self.native.control[7] = 0
         self.idle_native.control[0] = self.idle_update.control[0] = 0
         self.aim_native.control[0] = self.aim_native.crouch_control[0] = 0
         self.slam_override_owned = self.slam_pose_owned = False
         self.disarm_jump_idle()
+
+    def disarm_slam_heading(self):
+        if getattr(self, 'slam_heading_owned', False):
+            self.native.control[0] = self.native.control[7] = 0
+            self.slam_heading_owned = False
+            self.report['ground_slam_heading_hold']['enabled'] = False
+
+    def publish_native_slam_heading(self):
+        """Hold only the audited TurnState dispatch; leave skeletal pose native.
+
+        The .38 request capture identifies return RVA 0x2e2e17 at the airborne
+        heading change. The existing guarded prefix forwards the component's
+        current quaternion for this caller only. No actor setter or saved-yaw
+        snapback, no Aim/Idle controls, and no movement-delta interception.
+        Publish after the legacy Special pipeline has closed its gates.
+        """
+        owned = getattr(self, 'slam_heading_owned', False)
+        if not getattr(self, 'ground_slam_pose_native', False):
+            self.disarm_slam_heading()
+            return
+        self.native.control[0] = self.native.control[7] = 0
+        self.slam_heading_owned = False
+        if not self.active or not self.updates.is_game_thread():
+            return
+        pc, pawn, camera, movement = self.bound()
+        mode = self.camera_mode(pawn, camera)
+        free = (self.mod._third_person_enabled and mode in ('ThirdPerson', 'GroundSlamExit')
+                and self.impulse_index is not None and not self.combat['active']
+                and not pc.bShowMouseCursor and not any(bool(getattr(self.mod, name, False))
+                    for name in ('_ads_active', '_vehicle_camera_active',
+                                 '_shop_camera_active', '_ladder_active', '_slide_active')))
+        state = self.report.setdefault('ground_slam_heading_hold',
+            dict(enabled=False, eligible_updates=0, caller_return_rva='0x2e2e17'))
+        state.update(enabled=False, update=self.frames, camera_mode=mode)
+        if not free:
+            return
+        if any((self.idle_native.control[0], self.idle_update.control[0],
+                self.aim_native.control[0], self.aim_native.crouch_control[0])):
+            raise RuntimeError('Native Slam pose controls unexpectedly enabled')
+        if self.native.hook is None:
+            raise RuntimeError('Slam heading requires the installed owned TurnState guard')
+        if not owned:
+            self.native.validate()
+        self.native.control[8] = self.native.base + 0x2E2E17
+        self.native.control[7] = 1
+        self.native.control[0] = 1
+        self.slam_heading_owned = True
+        state.update(enabled=True, eligible_updates=state['eligible_updates']+1)
 
     def _slam_state_close_slam(self, reason):
         if self.slam_cycle is None:
@@ -98,8 +146,8 @@ class SlamMixin:
         pc, pawn, camera, movement = self.bound()
         free = str(camera.GetActorCameraMode(pawn)) == 'GroundSlamExit' and int(movement.MovementMode) == 1 and (int(movement.CustomMovementMode) == 0) and (self.impulse_index is not None) and (not self.combat['active']) and bool(self.mod._third_person_enabled) and (not bool(pc.bShowMouseCursor)) and (not any((bool(getattr(self.mod, k, False)) for k in ('_vehicle_camera_active', '_shop_camera_active', '_ladder_active', '_slide_active'))))
         elapsed = self.frames - cycle['start_update']
-        # The original Exit animation owns orientation as well as Aim/Idle.
-        # Retain read-only argument observation, never the old body hold.
+        # This legacy observer never enables the old combined body/pose hold.
+        # The final publication can hold only TurnState, with Aim/Idle native.
         enabled = False
         body = float(pawn.K2_GetActorRotation().Yaw)
         row = dict(sequence=cycle['sequence'], phase=cycle['phase'], update=self.frames, enabled=enabled, free=free, elapsed_updates=elapsed, body_yaw=body, captured_start_yaw=cycle['actor_yaw'], body_error_from_start=angle(body, cycle['actor_yaw']), control_yaw=float(pc.GetControlRotation().Yaw), replacement_count_delta=int(self.native.control[9]) - cycle['replacement_count_start'])

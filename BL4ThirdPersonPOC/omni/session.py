@@ -240,6 +240,7 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
         self.report['ground_slam_rotate_state_samples'] = []
         self.report['ground_slam_native_cycles'] = []
         self.slam_override_owned = False
+        self.slam_heading_owned = False
         self.report['ground_slam_native_ab_rows'] = []
         self.slam_pose_owned = False
         self.report['ground_slam_pose_ab_rows'] = []
@@ -755,6 +756,9 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
             if self.ground_slam_pose_native:
                 self.release_native_slam_pose()
                 self.close_jump('NATIVE_SLAM_POSE')
+            elif getattr(self, 'slam_heading_owned', False):
+                # Disarm before normal Omni publishes its own TurnState gates.
+                self.disarm_slam_heading()
             dash = self.is_dashing(pawn)
             self.disarm_ground_vector()
             if self.ground_clip_originals:
@@ -774,6 +778,8 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
                 self.ground_dash_seen = True
             self._ground_pose_frame(obj, args, ret, func)
             publish_free_look(self)
+            if self.ground_slam_pose_native:
+                self.publish_native_slam_heading()
             self._audit_tick = getattr(self, '_audit_tick', 0) + 1
             self._audit_full = False
         except Exception as exc:
@@ -830,6 +836,9 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
             owner.control[16] = 0
         self.jump_idle_owned = False
         self.slam_override_owned = False
+        self.slam_heading_owned = False
+        if 'ground_slam_heading_hold' in self.report:
+            self.report['ground_slam_heading_hold']['enabled'] = False
         self.slam_pose_owned = False
         attempt('grenade SDK subscription', self.grenade_facing.close)
         if self.air_cycle is not None:
