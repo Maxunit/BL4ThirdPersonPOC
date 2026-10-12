@@ -1,4 +1,23 @@
-# BL4ThirdPersonPOC 0.3.9.37 Ground Slam Update QA
+# BL4ThirdPersonPOC 0.3.9.38 Ground Slam Pose QA
+
+Für den Gegenrichtungsfall (Kamera Norden, Figur Süden) übernimmt das Spiel
+während des Slams gemeinsam Körperausrichtung, Aim- und Idle-Pose. .37 gab
+Aim bereits frei, hielt beim Exit aber die Körperrichtung und beide Idle-
+Eingriffe noch aktiv. Dieser gemischte Zustand wird jetzt entfernt.
+
+Der aktive Luft-Slam wird als nativer Sonderzustand behandelt; gewöhnliche
+Omni-Luftausrichtung läuft dort nicht. GroundSlamExit und der anschließende
+TPS-Kamera-Blend behalten die native Zuständigkeit. Nach ruhiger TPS-Rückkehr
+und dem vorhandenen Input-Release übernimmt wieder der normale Omni-Pfad.
+Das Spiel darf die Figur während des Slams nativ drehen; ihr aktueller Yaw
+ist danach der Ausgangspunkt für Omni. Kein erzwungenes Zurückdrehen auf
+eine gespeicherte Richtung. Sichtbares Ergebnis benötigt den Spieltest.
+
+- [Spieltest](docs/TESTPLAN_0.3.9.38_GROUND_SLAM_POSE_QA.md)
+- [Änderungen](docs/CHANGELOG_0.3.9.38_GROUND_SLAM_POSE_QA.md)
+- [Validierung](docs/VALIDATION_0.3.9.38_GROUND_SLAM_POSE_QA.md)
+
+## Enthalten: Ground Slam Update aus .37
 
 Die .36 hatte die Distanzberechnung an den Animations-Callback gehängt,
 dabei aber das Widget-Argument `InDeltaTime` verwendet. Ohne dieses Argument

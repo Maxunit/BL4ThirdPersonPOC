@@ -521,7 +521,7 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
             # flag fell; that hand-back belongs to the slide, not a special state.
             exiting = self.slide_exit_pending(camera, context['camera_mode'], slide)
             context['hybrid_scope_pause'] = hybrid_ads.omni_pause_required(self)
-            special = context['hybrid_scope_pause'] or context.get('mouse_cursor', False) or context['flags']['_shop_camera_active'] or context['flags']['_ladder_active'] or (int(movement.MovementMode) not in (1, 3)) or (context['camera_mode'] != 'ThirdPerson' and (not ((slide or exiting) and context['camera_mode'] in ('Slide', 'Default'))))
+            special = self.ground_slam_pose_native or context['hybrid_scope_pause'] or context.get('mouse_cursor', False) or context['flags']['_shop_camera_active'] or context['flags']['_ladder_active'] or (int(movement.MovementMode) not in (1, 3)) or (context['camera_mode'] != 'ThirdPerson' and (not ((slide or exiting) and context['camera_mode'] in ('Slide', 'Default'))))
             buttons = self.controls_down(pc)
             if special:
                 signature = (context['movement_mode'], context['custom_movement_mode'], context['camera_mode'], context['flags']['_ladder_active'], context.get('mouse_cursor', False), context['flags']['_shop_camera_active'], context['hybrid_scope_pause'])
@@ -751,12 +751,10 @@ class GameplaySession(SamplingMixin, AnimationMixin, GroundMixin, AirMixin, Slid
             input_scope.begin_frame(coherent=True)
             if getattr(self, 'staged_bind', False) and self.bind_step(pc, pawn, camera, movement):
                 return
-            self.ground_slam_pose_native = (self.is_ground_slamming(pawn, movement)
-                                           or self.camera_mode(pawn, camera) == 'GroundSlamExit')
+            self.ground_slam_pose_native = self.native_slam_pose_context(pawn, camera, movement)
             if self.ground_slam_pose_native:
-                # Release the previous grounded publication before doing air
-                # work. The final publisher keeps these gates closed as well.
-                self.aim_native.control[0] = self.aim_native.crouch_control[0] = 0
+                self.release_native_slam_pose()
+                self.close_jump('NATIVE_SLAM_POSE')
             dash = self.is_dashing(pawn)
             self.disarm_ground_vector()
             if self.ground_clip_originals:

@@ -255,7 +255,7 @@ class HeightCaptureTests(unittest.TestCase):
         result=subprocess.run([sys.executable,str(scenario)],capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stderr)
         report=json.loads(result.stdout)
-        self.assertEqual(report,dict(version='0.3.9.37',updates=600,hooks=0,game_writes=0))
+        self.assertEqual(report,dict(version='0.3.9.38',updates=600,hooks=0,game_writes=0))
 
     def test_ground_slam_references_are_plain_read_only_snapshots(self):
         capture=self.start()

@@ -196,7 +196,7 @@ class ProfilerTests(unittest.TestCase):
         script = Path(__file__).with_name('omni_profiler_loader_scenario.py')
         result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout), dict(version='0.3.9.37', updates=600, restored=True))
+        self.assertEqual(json.loads(result.stdout), dict(version='0.3.9.38', updates=600, restored=True))
 
 
 if __name__ == '__main__':

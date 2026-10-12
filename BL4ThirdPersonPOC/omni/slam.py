@@ -4,6 +4,21 @@ from .common import TAG, angle
 
 class SlamMixin:
 
+    def native_slam_pose_context(self, pawn, camera, movement):
+        mode = self.camera_mode(pawn, camera)
+        return (self.is_ground_slamming(pawn, movement) or mode == 'GroundSlamExit'
+                or (getattr(self, 'ground_slam_pose_native', False) and mode == 'ThirdPerson'
+                    and bool(camera.CameraModeState.bIsTransitioning)))
+
+    def release_native_slam_pose(self):
+        # One native owner for body facing and the complete pose. Merely
+        # releasing Aim while keeping Turn/Idle neutralisation mixes policies.
+        self.native.control[0] = self.native.control[7] = 0
+        self.idle_native.control[0] = self.idle_update.control[0] = 0
+        self.aim_native.control[0] = self.aim_native.crouch_control[0] = 0
+        self.slam_override_owned = self.slam_pose_owned = False
+        self.disarm_jump_idle()
+
     def _slam_state_close_slam(self, reason):
         if self.slam_cycle is None:
             return
@@ -78,20 +93,14 @@ class SlamMixin:
             return
         cycle = self.slam_cycle
         if 'phase' not in cycle:
-            cycle.update(phase='B', replacement_count_start=int(self.native.control[9]), eligible_updates=0)
-            logging.warning(TAG + ' ' + ('B_NATIVE_ROOT_HOLD' if cycle['phase'] == 'B' else 'A_ORIGINAL_EXIT') + ' sequence=' + str(cycle['sequence']))
+            cycle.update(phase='NATIVE_SLAM_POSE', replacement_count_start=int(self.native.control[9]), eligible_updates=0)
+            logging.warning(TAG + ' NATIVE_SLAM_POSE sequence=' + str(cycle['sequence']))
         pc, pawn, camera, movement = self.bound()
         free = str(camera.GetActorCameraMode(pawn)) == 'GroundSlamExit' and int(movement.MovementMode) == 1 and (int(movement.CustomMovementMode) == 0) and (self.impulse_index is not None) and (not self.combat['active']) and bool(self.mod._third_person_enabled) and (not bool(pc.bShowMouseCursor)) and (not any((bool(getattr(self.mod, k, False)) for k in ('_vehicle_camera_active', '_shop_camera_active', '_ladder_active', '_slide_active'))))
         elapsed = self.frames - cycle['start_update']
-        enabled = cycle['phase'] == 'B' and free and (elapsed < 256) and (self.native.hook is not None)
-        if enabled:
-            self.native.validate()
-            self.native.control[8] = self.native.base + 3026455
-            self.native.control[6] = self.frames
-            self.native.control[7] = 1
-            self.slam_override_owned = True
-            self.native.control[0] = 1
-            cycle['eligible_updates'] += 1
+        # The original Exit animation owns orientation as well as Aim/Idle.
+        # Retain read-only argument observation, never the old body hold.
+        enabled = False
         body = float(pawn.K2_GetActorRotation().Yaw)
         row = dict(sequence=cycle['sequence'], phase=cycle['phase'], update=self.frames, enabled=enabled, free=free, elapsed_updates=elapsed, body_yaw=body, captured_start_yaw=cycle['actor_yaw'], body_error_from_start=angle(body, cycle['actor_yaw']), control_yaw=float(pc.GetControlRotation().Yaw), replacement_count_delta=int(self.native.control[9]) - cycle['replacement_count_start'])
         self.report['ground_slam_native_ab_rows'].append(row)
@@ -125,16 +134,9 @@ class SlamMixin:
         c = self.slam_cycle
         if 'pose_root_start' not in c:
             c.update(pose_root_start=int(self.idle_native.control[3]), pose_idle_start=int(self.idle_update.control[3]), pose_aim_start=int(self.aim_native.control[3]))
-        enabled = bool(self.slam_override_owned)
-        if enabled:
-            for owner in (self.idle_native, self.idle_update, self.aim_native):
-                if owner.hook is None:
-                    raise RuntimeError('Slam pose binding unavailable')
-                owner.validate()
-            self.slam_pose_owned = True
-            self.idle_native.control[0] = 1
-            self.idle_update.control[0] = 1
-            self.aim_native.control[0] = 1
+        enabled = False
+        if not self.collect_pose_diagnostics:
+            return
         anim = self.combat_refs[1]()
         if anim is None:
             raise RuntimeError('Slam pose animation expired')
