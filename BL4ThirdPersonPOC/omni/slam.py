@@ -28,20 +28,26 @@ class SlamMixin:
             self.idle_native.control[0] = 0
             self.slam_exit_root_owned = False
             self.report['ground_slam_heading_hold']['root_correction_skipped'] = False
+        if getattr(self, 'slam_exit_idle_owned', False):
+            self.idle_update.control[0] = 0
+            self.slam_exit_idle_owned = False
+            self.report['ground_slam_heading_hold']['idle_fallback_selected'] = False
 
     def publish_native_slam_heading(self):
-        """Hold TurnState and the measured Exit Root correction; retain base pose.
+        """Hold heading and select native Idle fallback during Exit; keep Aim free.
 
         The .38 request capture identifies return RVA 0x2e2e17 at the airborne
         heading change. The existing guarded prefix forwards the component's
         current quaternion for this caller only. No actor setter or saved-yaw
         snapback or movement-delta interception. During Exit/its return skip
         only the existing IdleTurns extra Root multiplication after base pose;
-        IdleUpdate and Aim remain native, and the airborne Root stays native.
+        the original generic update still runs with input zero. Aim remains
+        native, and the airborne Root/IdleUpdate remain native.
         Publish after the legacy Special pipeline has closed its gates.
         """
         owned = getattr(self, 'slam_heading_owned', False)
         root_owned = getattr(self, 'slam_exit_root_owned', False)
+        idle_owned = getattr(self, 'slam_exit_idle_owned', False)
         if not getattr(self, 'ground_slam_pose_native', False):
             self.disarm_slam_heading()
             return
@@ -50,6 +56,9 @@ class SlamMixin:
         if root_owned:
             self.idle_native.control[0] = 0
         self.slam_exit_root_owned = False
+        if idle_owned:
+            self.idle_update.control[0] = 0
+        self.slam_exit_idle_owned = False
         if not self.active or not self.updates.is_game_thread():
             return
         pc, pawn, camera, movement = self.bound()
@@ -61,7 +70,7 @@ class SlamMixin:
                                  '_shop_camera_active', '_ladder_active', '_slide_active')))
         state = self.report.setdefault('ground_slam_heading_hold',
             dict(enabled=False, eligible_updates=0, caller_return_rva='0x2e2e17'))
-        state.update(enabled=False, root_correction_skipped=False,
+        state.update(enabled=False, root_correction_skipped=False, idle_fallback_selected=False,
                      update=self.frames, camera_mode=mode)
         if not free:
             return
@@ -73,10 +82,12 @@ class SlamMixin:
         root_hold = ((mode == 'GroundSlamExit' or root_owned)
                      and not self.is_ground_slamming(pawn, movement))
         if root_hold:
-            if self.idle_native.hook is None:
-                raise RuntimeError('Slam Exit Root requires the installed owned IdleRoot guard')
+            if self.idle_native.hook is None or self.idle_update.hook is None:
+                raise RuntimeError('Slam Exit requires installed owned IdleRoot/IdleUpdate guards')
             if not root_owned:
                 self.idle_native.validate()
+            if not idle_owned:
+                self.idle_update.validate()
         if not owned:
             self.native.validate()
         self.native.control[8] = self.native.base + 0x2E2E17
@@ -86,7 +97,9 @@ class SlamMixin:
         if root_hold:
             self.idle_native.control[0] = 1
             self.slam_exit_root_owned = True
-        state.update(enabled=True, root_correction_skipped=root_hold,
+            self.idle_update.control[0] = 1
+            self.slam_exit_idle_owned = True
+        state.update(enabled=True, root_correction_skipped=root_hold, idle_fallback_selected=root_hold,
                      eligible_updates=state['eligible_updates']+1)
 
     def _slam_state_close_slam(self, reason):
@@ -170,7 +183,7 @@ class SlamMixin:
         elapsed = self.frames - cycle['start_update']
         # This legacy observer never enables the old combined body/pose hold.
         # Final publication may hold TurnState plus the extra Exit Root correction;
-        # IdleUpdate and Aim remain native.
+        # Native generic update remains; Aim gates are never reopened.
         enabled = False
         body = float(pawn.K2_GetActorRotation().Yaw)
         row = dict(sequence=cycle['sequence'], phase=cycle['phase'], update=self.frames, enabled=enabled, free=free, elapsed_updates=elapsed, body_yaw=body, captured_start_yaw=cycle['actor_yaw'], body_error_from_start=angle(body, cycle['actor_yaw']), control_yaw=float(pc.GetControlRotation().Yaw), replacement_count_delta=int(self.native.control[9]) - cycle['replacement_count_start'])

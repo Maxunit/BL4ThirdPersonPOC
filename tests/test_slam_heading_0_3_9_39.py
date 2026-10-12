@@ -44,7 +44,7 @@ class HeadingTests(unittest.TestCase):
             session.release_native_slam_pose()
             session.paused_special_frame(None,None,None,None)
             session.publish_native_slam_heading()
-            self.assertEqual(controls(session),(1,1,1,0,0,0))
+            self.assertEqual(controls(session),(1,1,1,1,0,0))
             self.assertTrue(session.slam_heading_owned)
         pawn.K2_SetActorRotation.assert_not_called()
 

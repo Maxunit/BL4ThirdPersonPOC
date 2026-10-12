@@ -198,7 +198,7 @@ class RootHeightTests(unittest.TestCase):
             cwd=ROOT,text=True,capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr)
         report=json.loads(result.stdout)
-        self.assertEqual(report['version'],'0.3.9.40')
+        self.assertEqual(report['version'],'0.3.9.41')
         self.assertTrue(report['menu_option'])
         self.assertLess(report['on_z'],-30)
         self.assertEqual(report['off_z'],10)

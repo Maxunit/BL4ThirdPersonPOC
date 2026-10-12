@@ -26,8 +26,8 @@ def toggle():
         old.finish('MANUAL_STOP')
         return
     mod = sys.modules.get('BL4ThirdPersonPOC')
-    if mod is None or getattr(mod, 'MOD_VERSION', None) not in ('0.3.9.39', '0.3.9.40'):
-        raise RuntimeError('Load BL4ThirdPersonPOC .39 or .40 first')
+    if mod is None or getattr(mod, 'MOD_VERSION', None) not in ('0.3.9.39', '0.3.9.40', '0.3.9.41'):
+        raise RuntimeError('Load BL4ThirdPersonPOC .39, .40 or .41 first')
     from BL4ThirdPersonPOC import camera_height_capture as height, runtime_updates
     from BL4ThirdPersonPOC.omni import profiler
     from BL4ThirdPersonPOC.omni.common import KEY as OMNI_KEY, quat
@@ -265,8 +265,10 @@ def toggle():
             if row['omni'].get('active'):
                 gates = row['omni']['gates']
                 expected_root = bool(row['omni']['heading_hold'].get('root_correction_skipped', False))
+                expected_idle = bool(row['omni']['heading_hold'].get('idle_fallback_selected', False))
                 row['unexpected_slam_pose_controls'] = (row['omni']['native_slam_pose'] and
-                    (any(gates[name] for name in ('idle_update', 'aim', 'crouch_aim'))
+                    (any(gates[name] for name in ('aim', 'crouch_aim'))
+                     or bool(gates['idle_update']) and not expected_idle
                      or bool(gates['idle_root']) and not expected_root))
                 row['pose_controls_enabled'] = any(row['omni']['gates'][name] for name in
                     ('idle_root', 'idle_update', 'aim', 'crouch_aim'))

@@ -19,11 +19,12 @@ class RootExitTests(unittest.TestCase):
             session.release_native_slam_pose()
             session.paused_special_frame(None,None,None,None)
             session.publish_native_slam_heading()
-            self.assertEqual(heading.controls(session),(1,1,1,0,0,0))
+            self.assertEqual(heading.controls(session),(1,1,1,1,0,0))
             self.assertTrue(session.slam_exit_root_owned)
             self.assertTrue(session.report['ground_slam_heading_hold']['root_correction_skipped'])
         self.assertEqual(session.idle_native.validate.call_count,1)
-        self.assertFalse(any(i==0 and value for i,value in session.idle_update.control.writes))
+        self.assertTrue(any(i==0 and value for i,value in session.idle_update.control.writes))
+        self.assertTrue(session.slam_exit_idle_owned)
         self.assertFalse(any(i==0 and value for i,value in session.aim_native.control.writes))
         pawn.K2_SetActorRotation.assert_not_called()
 
@@ -53,7 +54,7 @@ class RootExitTests(unittest.TestCase):
         camera.CameraModeState.bIsTransitioning=True
         for _ in range(35):
             session.release_native_slam_pose();session.publish_native_slam_heading()
-            self.assertEqual(heading.controls(session),(1,1,1,0,0,0))
+            self.assertEqual(heading.controls(session),(1,1,1,1,0,0))
         session.ground_slam_pose_native=False;session.disarm_slam_heading()
         self.assertEqual(heading.controls(session),(0,0,0,0,0,0))
         self.assertFalse(session.slam_exit_root_owned)
@@ -61,7 +62,7 @@ class RootExitTests(unittest.TestCase):
     def test_repeated_publication_accepts_its_own_root_guard(self):
         session,*_=fixture()
         session.publish_native_slam_heading();session.publish_native_slam_heading()
-        self.assertEqual(heading.controls(session),(1,1,1,0,0,0))
+        self.assertEqual(heading.controls(session),(1,1,1,1,0,0))
         self.assertEqual(session.idle_native.validate.call_count,1)
 
     def test_unavailable_or_changed_root_guard_fails_before_heading_publication(self):
@@ -124,10 +125,10 @@ class RootExitTests(unittest.TestCase):
             mode='GroundSlamExit';movement.MovementMode=1
             pawn.IsPerformingGroundSlam.return_value=False
             session.frame(None,None,None,None)
-            self.assertEqual(heading.controls(session),(1,1,1,0,0,0))
+            self.assertEqual(heading.controls(session),(1,1,1,1,0,0))
             mode='ThirdPerson';camera.CameraModeState.bIsTransitioning=True
             session.frame(None,None,None,None)
-            self.assertEqual(heading.controls(session),(1,1,1,0,0,0))
+            self.assertEqual(heading.controls(session),(1,1,1,1,0,0))
             camera.CameraModeState.bIsTransitioning=False
             session.frame(None,None,None,None)
             self.assertEqual(resumed,[(0,0,0,0,0,0)])

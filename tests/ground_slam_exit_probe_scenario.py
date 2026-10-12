@@ -81,6 +81,16 @@ class ExitTests(rotation.RotationTests):
         self.assertEqual(self.child.idle_native.control[0],1)
         self.execute();self.saved(c)
 
+    def test_41_expected_idle_fallback_is_reported_without_being_modified(self):
+        rotation.facing.phase.mod.MOD_VERSION='0.3.9.41'
+        c=self.arm();self.mode='GroundSlamExit';self.child.ground_slam_pose_native=True
+        self.child.idle_native.control[0]=self.child.idle_update.control[0]=1
+        self.child.report['ground_slam_heading_hold'].update(root_correction_skipped=True,idle_fallback_selected=True)
+        self.tick();row=c.report['samples'][-1]
+        self.assertFalse(row['unexpected_slam_pose_controls'])
+        self.assertEqual(self.child.idle_update.control[0],1)
+        self.execute();self.saved(c)
+
     def test_optional_sdk_command_failure_preserves_core_exit_data(self):
         c=self.arm();del self.world.movement.CurrentRotateToState
         self.mode='GroundSlamExit';self.tick();self.execute();r=self.saved(c)

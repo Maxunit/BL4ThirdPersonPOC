@@ -43,3 +43,6 @@ The separate .38 rotation-request probe intentionally remains .38-only.
 The script also accepts .40: the existing Root guard is expected only during
 Exit/its owned return (Turn/TurnReplace/IdleRoot=1/1/1; other three gates=0).
 For detailed .40 Exit capture prefer `ground_slam_exit_capture.py`.
+
+The facing script also accepts .41; its expected Exit/return gates are
+Turn/TurnReplace/IdleRoot/IdleUpdate=1/1/1/1, Aim/CrouchAim=0/0.

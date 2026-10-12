@@ -68,3 +68,10 @@ distinguishes that guard from unexpected IdleUpdate/Aim/CrouchAim controls.
 Airborne Slam remains Turn/TurnReplace=1/1, Root/Update/Aim/Crouch=0/0/0/0;
 Exit and its owned return use 1/1/1/0/0/0. The diagnostic does not alter these.
 Sixteen local probe tests now include this .40 distinction.
+
+## .41 support
+
+The script also accepts .41. Expected Exit/owned return gates are now
+(1,1,1,1,0,0), with `idle_fallback_selected=true`. This is original input-zero
+selection followed by the original generic update, not a stopped animation
+update. Air stays (1,1,0,0,0,0). Seventeen local probe scenarios pass.

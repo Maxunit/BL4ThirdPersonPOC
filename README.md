@@ -1,28 +1,27 @@
-# BL4ThirdPersonPOC 0.3.9.40 Ground Slam Root Exit QA
+# BL4ThirdPersonPOC 0.3.9.41 Ground Slam Idle Exit QA
 
-Die .39 hielt Actor und Mesh im Luft-Slam und beim Exit korrekt. Die neue
-Aufzeichnung zeigt den verbleibenden sichtbaren Konflikt in der animierten
-Root: Nach Rückkehr des IdleTurns-Pfads dreht sie stark gegen den gehaltenen
-Actor. Es ist kein erneuter Actor-/Mesh-Richtungswechsel.
+Die .40-Aufnahme bestätigt festen Actor, Mesh und Root, aber Aim-Yaw wechselt
+im Exit bei jedem Update ungefähr zwischen +177° und -177°. Der aufgezeichnete
+IdleTurns-Update enthält eine vorzeichenabhängige Auswahl zweier Dreh-Eingänge.
+Sein bestehender Idle-Fallback wählt Eingang 0 und ruft danach weiterhin den
+ursprünglichen generischen Update auf. Das wurde zusätzlich nativ mit dem
+aufgenommenen Code und synthetischen Receivern/Hilfsfunktionen geprüft.
 
-.40 verwendet beim GroundSlamExit und seinem TPS-Rückkehrblend zusätzlich den
-bestehenden, lokal begrenzten IdleRoot-Guard. Dieser überspringt nur die extra
-Root-Quaternion-Multiplikation **nach** der ursprünglichen Pose-Auswertung.
-IdleUpdate, Aim und CrouchAim bleiben freigegeben. In der Luft bleibt auch diese
-Root-Korrektur nativ; der bestätigte TurnState-Heading-Hold aus .39 bleibt.
+.41 aktiviert diesen bereits vorhandenen lokal begrenzten Fallback nur beim
+Exit und dessen eigener TPS-Rückkehr, zusammen mit Heading-/Root-Hold aus .40.
+Aim und CrouchAim bleiben durchgehend freigegeben. Der ältere .37-Exit-Pfad
+öffnete Aim zwischenzeitlich erneut; das tut diese QA nicht. In der Luft bleiben
+Root-/IdleUpdate-/Aim-Eingriffe aus. Vor normalem Omni-Resume werden eigene
+Holds geschlossen; Combat/ADS/UI und andere Sonderzustände behalten Priorität.
 
-Vor normaler Omni-Wiederaufnahme werden beide eigenen Holds geschlossen.
-Combat/ADS/UI und andere Sonderzustände behalten Priorität. Kein neuer
-Maschinencode, Hook, Producer, Timer oder gewöhnlicher Omni-SDK-Getter.
-Distanzfunktion mit 150 cm und Root-Höhenkorrektur sind bytegleich zu .39.
+Kein neuer nativer Code oder Patch, Hook, Producer, Timer oder gewöhnlicher
+Omni-SDK-Getter. Die 150-cm-Distanzfunktion und Root-Höhenkorrektur sind bytegleich
+zu .40. Sichtbare Ruhe und vollständige Slam-Pose zusammen benötigen Nutzer-QA.
+Der native Replay prüft Auswahl/Dispatch, nicht gerenderte Unreal-Animation.
 
-Die animierte Root ist hier die Skelettrotation; die angenommene Root-Höhen-
-Kamerakorrektur aus .35 wird nicht verändert. Vollständige Slam-/Exit-Pose und
-sichtbare Ruhe zusammen müssen jetzt im Spiel bestätigt werden.
-
-- [Spieltest](docs/TESTPLAN_0.3.9.40_GROUND_SLAM_ROOT_EXIT_QA.md)
-- [Änderungen](docs/CHANGELOG_0.3.9.40_GROUND_SLAM_ROOT_EXIT_QA.md)
-- [Validierung](docs/VALIDATION_0.3.9.40_GROUND_SLAM_ROOT_EXIT_QA.md)
+- [Spieltest](docs/TESTPLAN_0.3.9.41_GROUND_SLAM_IDLE_EXIT_QA.md)
+- [Änderungen](docs/CHANGELOG_0.3.9.41_GROUND_SLAM_IDLE_EXIT_QA.md)
+- [Validierung](docs/VALIDATION_0.3.9.41_GROUND_SLAM_IDLE_EXIT_QA.md)
 
 ## Enthalten: Ground Slam Update aus .37
 
