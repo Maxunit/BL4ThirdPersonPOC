@@ -46,6 +46,12 @@ def configured(mod):
     return max(0., min(250., finite(option.value))) if option is not None else 0.
 
 
+def character_movement(pawn):
+    # The locally possessed pawn can be OakVehicle. Missing character movement
+    # is an expected perspective/possession handoff, not a Slam-distance fault.
+    return None if pawn is None else getattr(pawn, 'OakCharacterMovement', None)
+
+
 def permitted(mod, pc):
     from . import ffyl_strategy_runtime
     return (mod._third_person_enabled and mod._third_person_pushed
@@ -85,7 +91,7 @@ class Distance:
 
     def current(self):
         pc, pawn, camera = self.mod._get_runtime()
-        objects = (pc, pawn, camera, None if pawn is None else pawn.OakCharacterMovement)
+        objects = (pc, pawn, camera, character_movement(pawn))
         if not self.matches(objects):
             raise RuntimeError('Slam distance owner changed')
         return objects
@@ -238,7 +244,7 @@ class Distance:
         live = tuple(ref() for ref in self.refs)
         current = tuple(self.mod._get_runtime())
         if (any(o is None for o in live) or live[:3] != current
-                or current[1].OakCharacterMovement != live[3]):
+                or character_movement(current[1]) != live[3]):
             self.bridge = None
             return
         if self.owns_exit(self.bridge['state']):
@@ -365,7 +371,15 @@ def update(mod, pc, pawn, camera, mode):
         shutdown_state(mod)
         return
     try:
-        objects = (pc, pawn, camera, pawn.OakCharacterMovement)
+        if (any(o is None for o in (pc, pawn, camera))
+                or bool(getattr(mod, '_vehicle_camera_active', False))):
+            shutdown_state(mod)
+            return
+        movement = character_movement(pawn)
+        if movement is None:
+            shutdown_state(mod)
+            return
+        objects = (pc, pawn, camera, movement)
         if state is None or not state.matches(objects):
             if state is not None:
                 state.restore_bridge()
@@ -388,7 +402,7 @@ def compensate(mod, pc, pawn, camera, values):
             or frame is None or frame.get('slam_distance_mode') != 'ThirdPerson'
             or not permitted(mod, pc) or state.mode != 'ThirdPerson'
             or (camera.CameraModeState.bIsTransitioning and not state.fallback)
-            or not state.matches((pc, pawn, camera, pawn.OakCharacterMovement))):
+            or not state.matches((pc, pawn, camera, character_movement(pawn)))):
         return values
     # A fresh mode proof in this setter scope also covers Root height off.
     baseline = values[0]
